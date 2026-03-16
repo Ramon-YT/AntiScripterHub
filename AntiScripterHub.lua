@@ -25,7 +25,7 @@ task.spawn(function()
 
     -- ===== Botão principal (drageável) =====
     local mainBtn = Instance.new("TextButton")
-    mainBtn.Size = UDim2.new(0, 70, 0, 70)
+    mainBtn.Size = UDim2.new(0, 50, 0, 50)
     local savedX = player:GetAttribute("BotaoPosX") or 40
     local savedY = player:GetAttribute("BotaoPosY") or 40
     mainBtn.Position = UDim2.new(0, savedX, 0, savedY)
@@ -34,7 +34,7 @@ task.spawn(function()
     mainBtn.TextSize = 32
     mainBtn.Font = Enum.Font.GothamBold
     mainBtn.TextColor3 = Color3.new(1,1,1)
-    mainBtn.ZIndex = 9999
+    mainBtn.ZIndex = 10000
     mainBtn.Parent = gui
     Instance.new("UICorner", mainBtn).CornerRadius = UDim.new(0, 18)
 
@@ -44,9 +44,26 @@ task.spawn(function()
     frame.Position = UDim2.new(0.5, -190, 0.5, -210)
     frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
     frame.Visible = false
-    frame.ZIndex = 9999
+    frame.ZIndex = 9998
     frame.Parent = gui
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+    
+    -- Botão X de fechar (canto superior direito)
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.new(0, 34, 0, 34)
+    closeBtn.Position = UDim2.new(1, -38, 0, 4)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+    closeBtn.Text = "X"
+    closeBtn.TextColor3 = Color3.new(1,1,1)
+    closeBtn.TextSize = 22
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.ZIndex = 9999
+    closeBtn.Parent = frame
+    Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
+
+    closeBtn.MouseButton1Click:Connect(function()
+        frame.Visible = false
+    end)
 
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 35)
@@ -255,6 +272,9 @@ task.spawn(function()
     -- savedWalkSpeed / savedJumpHeight são os valores que o enforcer aplica ao jogador
     local savedWalkSpeed = 16
     local savedJumpHeight = 7.2
+
+    -- ===== Flight global parameter (moved to top-level so UI can change it) =====
+    local FLIGHT_BASE_SPEED = 80 -- will be updated when user changes WalkSpeed (multiplied)
 
     -- defaults por jogo (serão carregados/gravados em atributos do player)
     local function getSavedDefaultsForPlace()
@@ -668,16 +688,23 @@ task.spawn(function()
     end
 
     -- ===== Highlight (reaplica nome e outline automaticamente) =====
-    local highlightConnections = {} -- [player] = {charConn = connection, nameConn = connection}
+    local highlightConnections = {} -- [player] = {charConn = connection, nameConn = connection, enforcerConn = connection}
+    local highlightEnforcerConnections = {} -- [player] = RenderStepped connection to enforce our highlight properties
 
     local function clearHighlightForCharacter(char)
         if not char then return end
-        local hl = char:FindFirstChildOfClass("Highlight")
-        if hl then hl:Destroy() end
+        -- remove our highlight(s) and billboards
+        for _, obj in ipairs(char:GetChildren()) do
+            if obj:IsA("Highlight") and obj.Name == "AntiScripterHighlight" then
+                obj:Destroy()
+            end
+        end
         local head = char:FindFirstChild("Head")
         if head then
             local old = head:FindFirstChild("HighlightName")
             if old then old:Destroy() end
+            local suspect = head:FindFirstChild("SuspectTag")
+            if suspect then suspect:Destroy() end
         end
     end
 
@@ -712,6 +739,67 @@ task.spawn(function()
         label.Text = plr.DisplayName and (plr.DisplayName .. " (@" .. plr.Name .. ")") or ("@" .. plr.Name)
     end
 
+    local function createOrUpdateOurHighlight(char)
+        if not char then return end
+        -- ensure only our highlight has the special name
+        local ourHl = nil
+        for _, obj in ipairs(char:GetChildren()) do
+            if obj:IsA("Highlight") and obj.Name == "AntiScripterHighlight" then
+                ourHl = obj
+                break
+            end
+        end
+
+        if not ourHl then
+            ourHl = Instance.new("Highlight")
+            ourHl.Name = "AntiScripterHighlight"
+            ourHl.Parent = char
+        end
+
+        -- enforce properties that make it render on top and visible
+        ourHl.FillTransparency = 1
+        ourHl.OutlineColor = Color3.fromRGB(0, 255, 0)
+        ourHl.OutlineTransparency = 0
+        ourHl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    end
+
+    local function neutralizeOtherHighlights(char)
+        -- try to neutralize other highlights created by the game by increasing their transparency
+        for _, obj in ipairs(char:GetChildren()) do
+            if obj:IsA("Highlight") and obj.Name ~= "AntiScripterHighlight" then
+                -- prefer to avoid destroying game objects; instead make them invisible
+                pcall(function()
+                    obj.OutlineTransparency = 1
+                    obj.FillTransparency = 1
+                    -- if the game keeps re-creating them, our enforcer will keep forcing them transparent
+                end)
+            end
+        end
+    end
+
+    local function startHighlightEnforcerForPlayer(plr)
+        if not plr then return end
+        if highlightEnforcerConnections[plr] then return end
+        local conn = RunService.RenderStepped:Connect(function()
+            if not highlightActive then return end
+            if not plr.Character then return end
+            -- enforce our highlight and neutralize others every frame
+            createOrUpdateOurHighlight(plr.Character)
+            neutralizeOtherHighlights(plr.Character)
+            -- ensure billboard text updated
+            ensureBillboard(plr)
+        end)
+        highlightEnforcerConnections[plr] = conn
+    end
+
+    local function stopHighlightEnforcerForPlayer(plr)
+        local conn = highlightEnforcerConnections[plr]
+        if conn then
+            conn:Disconnect()
+            highlightEnforcerConnections[plr] = nil
+        end
+    end
+
     local function applyHighlight(plr, active)
         pcall(function()
             if not plr then return end
@@ -719,34 +807,12 @@ task.spawn(function()
             local char = plr.Character
             if not char then return end
 
-            -- Highlight object
-            local hl = char:FindFirstChildOfClass("Highlight")
             if active then
-                if not hl then
-                    hl = Instance.new("Highlight")
-                    hl.FillTransparency = 1
-                    hl.OutlineColor = Color3.fromRGB(0, 255, 0)
-                    hl.OutlineTransparency = 0
-                    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                    hl.Parent = char
-                else
-                    hl.OutlineColor = Color3.fromRGB(0, 255, 0)
-                    hl.OutlineTransparency = 0
-                end
+                createOrUpdateOurHighlight(char)
+                ensureBillboard(plr)
+                startHighlightEnforcerForPlayer(plr)
             else
-                if hl then hl:Destroy() end
-            end
-
-            -- Ensure billboard and label exist and are updated
-            if active then
-                local head = char:FindFirstChild("Head")
-                if not head then
-                    head = char:WaitForChild("Head", 1)
-                end
-                if head then
-                    ensureBillboard(plr)
-                end
-            else
+                stopHighlightEnforcerForPlayer(plr)
                 clearHighlightForCharacter(char)
             end
         end)
@@ -757,6 +823,7 @@ task.spawn(function()
         if highlightConnections[plr] then
             if highlightConnections[plr].charConn then highlightConnections[plr].charConn:Disconnect() end
             if highlightConnections[plr].nameConn then highlightConnections[plr].nameConn:Disconnect() end
+            if highlightConnections[plr].removingConn then highlightConnections[plr].removingConn:Disconnect() end
             highlightConnections[plr] = nil
         end
 
@@ -780,7 +847,15 @@ task.spawn(function()
             end
         end)
 
-        highlightConnections[plr] = {charConn = charConn, nameConn = nameConn}
+        -- If character removed, ensure we stop enforcer and cleanup
+        local removingConn = plr.AncestryChanged:Connect(function()
+            if not plr:IsDescendantOf(game) then
+                stopHighlightEnforcerForPlayer(plr)
+                highlightConnections[plr] = nil
+            end
+        end)
+
+        highlightConnections[plr] = {charConn = charConn, nameConn = nameConn, removingConn = removingConn}
     end
 
     local function disconnectHighlightForPlayer(plr)
@@ -788,7 +863,12 @@ task.spawn(function()
         if highlightConnections[plr] then
             if highlightConnections[plr].charConn then highlightConnections[plr].charConn:Disconnect() end
             if highlightConnections[plr].nameConn then highlightConnections[plr].nameConn:Disconnect() end
+            if highlightConnections[plr].removingConn then highlightConnections[plr].removingConn:Disconnect() end
             highlightConnections[plr] = nil
+        end
+        stopHighlightEnforcerForPlayer(plr)
+        if plr.Character then
+            clearHighlightForCharacter(plr.Character)
         end
     end
 
@@ -811,10 +891,13 @@ task.spawn(function()
 
     local function disableHighlightsForAll()
         for _, plr in ipairs(Players:GetPlayers()) do
+            disconnectHighlightForPlayer(plr)
+        end
+        -- also clear any leftover highlights in workspace characters
+        for _, plr in ipairs(Players:GetPlayers()) do
             if plr.Character then
                 clearHighlightForCharacter(plr.Character)
             end
-            disconnectHighlightForPlayer(plr)
         end
     end
 
@@ -952,106 +1035,280 @@ task.spawn(function()
         end
     end)
 
-    -- ===== Fly (mantido) =====
+    -- ===== Fly substituído pelo novo Fly (PC / Mobile / Gamepad) =====
+    local cam = workspace.CurrentCamera
+
+    -- ====== CONFIG (uses FLIGHT_BASE_SPEED defined above) ======
+    local SPRINT_MULT = 1.6
+    local ASCEND_SPEED = 60
+    local SMOOTHNESS = 0.18
+    local MAX_FORCE = 1e5
+    local TOUCH_DESCEND_SIDE = 0.5
+    -- ====================
+
+    -- Estado
     local flying = false
-    local flySpeed = 45
-    local verticalMultiplier = 1.25
-    local bodyVelocity, bodyGyro, flyConnection
-    local prevAutoRotate = nil
+    local rootPart, humanoid
+    local bv, bg
+    local currentVelocity = Vector3.new()
+    local targetVelocity = Vector3.new()
+    local verticalTarget = 0
+    local sprinting = false
 
+    -- Inversões manuais (se precisar)
+    local invertForward = false
+    local invertRight = false
+
+    -- Variáveis para gamepad thumbstick
+    local gamepadStick = Vector2.new(0,0)
+
+    -- Inicia forças de voo
     local function startFly()
-        pcall(function()
-            local char = player.Character
-            if not char then return end
+        if not player.Character then return end
+        rootPart = player.Character:FindFirstChild("HumanoidRootPart")
+        humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+        if not rootPart or not humanoid then return end
+        if flying then return end
+        flying = true
 
-            local root = char:FindFirstChild("HumanoidRootPart")
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if not root or not hum then return end
+        pcall(function() humanoid.PlatformStand = true end)
 
-            prevAutoRotate = hum.AutoRotate
-            hum.AutoRotate = false
-            hum.PlatformStand = true
-            hum:ChangeState(Enum.HumanoidStateType.Physics)
+        bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(MAX_FORCE, MAX_FORCE, MAX_FORCE)
+        bv.Velocity = Vector3.new(0,0,0)
+        bv.Parent = rootPart
 
-            if bodyVelocity then bodyVelocity:Destroy() end
-            bodyVelocity = Instance.new("BodyVelocity")
-            bodyVelocity.MaxForce = Vector3.new(1e6, 1e6, 1e6)
-            bodyVelocity.Velocity = Vector3.zero
-            bodyVelocity.Parent = root
+        bg = Instance.new("BodyGyro")
+        bg.MaxTorque = Vector3.new(MAX_FORCE, MAX_FORCE, MAX_FORCE)
+        bg.P = 1e5
+        bg.D = 0
+        bg.CFrame = rootPart.CFrame
+        bg.Parent = rootPart
 
-            if bodyGyro then bodyGyro:Destroy() end
-            bodyGyro = Instance.new("BodyGyro")
-            bodyGyro.MaxTorque = Vector3.new(1e8, 1e8, 1e8)
-            bodyGyro.P = 15000
-            bodyGyro.D = 800
-            bodyGyro.Parent = root
-
-            flying = true
-            flyBtn.Text = "FLY ON"
-            flyBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
-            addLog("Fly ativado")
-
-            if flyConnection then flyConnection:Disconnect() end
-            flyConnection = RunService.RenderStepped:Connect(function()
-                pcall(function()
-                    if not flying then return end
-                    local currentChar = player.Character
-                    if not currentChar then return end
-                    local currentRoot = currentChar:FindFirstChild("HumanoidRootPart")
-                    if not currentRoot then return end
-
-                    local camera = Workspace.CurrentCamera
-                    if not camera then return end
-
-                    local humLocal = currentChar:FindFirstChildOfClass("Humanoid")
-                    if not humLocal then return end
-                    local move = humLocal.MoveDirection
-
-                    local worldMoveDir = Vector3.new(move.X, 0, move.Z)
-                    if worldMoveDir.Magnitude > 0.01 then
-                        worldMoveDir = worldMoveDir.Unit
-                    else
-                        worldMoveDir = Vector3.zero
-                    end
-
-                    local lookY = camera.CFrame.LookVector.Y
-                    local vertical = math.clamp(lookY, -1, 1) * verticalMultiplier
-
-                    if move.Magnitude > 0.05 then
-                        bodyVelocity.Velocity = worldMoveDir * flySpeed + Vector3.new(0, vertical * flySpeed, 0)
-                    else
-                        bodyVelocity.Velocity = Vector3.new(0, vertical * flySpeed, 0)
-                    end
-
-                    bodyGyro.CFrame = CFrame.new(currentRoot.Position, currentRoot.Position + camera.CFrame.LookVector)
-                end)
-            end)
-        end)
+        -- ensure camera reference
+        cam = workspace.CurrentCamera or cam
+        -- update UI button
+        flyBtn.Text = "FLY ON"
+        flyBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
+        addLog("Fly ativado")
     end
 
     local function stopFly()
-        pcall(function()
-            flying = false
-            if flyConnection then flyConnection:Disconnect() flyConnection = nil end
-            if bodyVelocity then bodyVelocity:Destroy() bodyVelocity = nil end
-            if bodyGyro then bodyGyro:Destroy() bodyGyro = nil end
+        flying = false
+        if humanoid then pcall(function() humanoid.PlatformStand = false end) end
+        if bv then bv:Destroy(); bv = nil end
+        if bg then bg:Destroy(); bg = nil end
+        currentVelocity = Vector3.new()
+        targetVelocity = Vector3.new()
+        verticalTarget = 0
 
-            local char = player.Character
-            if not char then return end
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then
-                hum.PlatformStand = false
-                hum.AutoRotate = prevAutoRotate or true
-                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-                task.wait(0.05)
-                hum:ChangeState(Enum.HumanoidStateType.Running)
+        -- update UI button
+        flyBtn.Text = "FLY OFF"
+        flyBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        addLog("Fly desativado")
+    end
+
+    -- Entradas
+    UserInputService.InputChanged:Connect(function(input, gameProcessed)
+        if input.UserInputType == Enum.UserInputType.Gamepad1 or input.UserInputType == Enum.UserInputType.Gamepad2 then
+            if input.KeyCode == Enum.KeyCode.Thumbstick1 or input.KeyCode == Enum.KeyCode.Thumbstick2 then
+                local v = input.Position
+                gamepadStick = Vector2.new(v.X, v.Y)
+            end
+        end
+    end)
+
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.LeftAlt then
+            sprinting = true
+        elseif input.KeyCode == Enum.KeyCode.Space then
+            verticalTarget = 1
+        elseif input.KeyCode == Enum.KeyCode.I then
+            invertForward = not invertForward
+        elseif input.KeyCode == Enum.KeyCode.O then
+            invertRight = not invertRight
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.LeftAlt then
+            sprinting = false
+        elseif input.KeyCode == Enum.KeyCode.Space then
+            verticalTarget = 0
+        end
+    end)
+
+    UserInputService.JumpRequest:Connect(function()
+        verticalTarget = 1
+        delay(0.12, function()
+            if verticalTarget == 1 then verticalTarget = 0 end
+        end)
+    end)
+
+    UserInputService.TouchStarted:Connect(function(t, g)
+        if g then return end
+        local screenX = UserInputService:GetScreenResolution().X
+        if t.Position.X > screenX * TOUCH_DESCEND_SIDE then
+            verticalTarget = -1
+        end
+    end)
+    UserInputService.TouchEnded:Connect(function(t, g)
+        if g then return end
+        local screenX = UserInputService:GetScreenResolution().X
+        if t.Position.X > screenX * TOUCH_DESCEND_SIDE then
+            if verticalTarget == -1 then verticalTarget = 0 end
+        end
+    end)
+
+    -- Função que unifica inputs
+    local function getInputAxes()
+        local inputX, inputZ = 0, 0
+
+        -- 1) Prioriza Humanoid.MoveDirection (joystick padrão mobile)
+        if humanoid then
+            local md = humanoid.MoveDirection
+            if md and md.Magnitude > 0.01 and cam then
+                -- Use a projeção horizontal da câmera para calcular forward (evita problema ao olhar 90 graus)
+                local camLook = cam.CFrame.LookVector
+                local camRight = cam.CFrame.RightVector
+
+                local forwardFlat = Vector3.new(camLook.X, 0, camLook.Z)
+                if forwardFlat.Magnitude > 0 then forwardFlat = forwardFlat.Unit end
+
+                local rightFlat = Vector3.new(camRight.X, 0, camRight.Z)
+                if rightFlat.Magnitude > 0 then rightFlat = rightFlat.Unit end
+
+                local forwardAmount = md:Dot(forwardFlat)
+                local rightAmount = md:Dot(rightFlat)
+
+                inputZ = forwardAmount
+                inputX = rightAmount
+
+                -- Se o resultado for insignificante, não use esse caminho (deixe cair para gamepad/teclado)
+                if math.abs(inputX) > 0.01 or math.abs(inputZ) > 0.01 then
+                    if invertForward then inputZ = -inputZ end
+                    if invertRight then inputX = -inputX end
+
+                    -- normalizar se necessário
+                    local mag = math.sqrt(inputX*inputX + inputZ*inputZ)
+                    if mag > 1 then
+                        inputX = inputX / mag
+                        inputZ = inputZ / mag
+                    end
+
+                    return inputX, inputZ
+                end
+            end
+        end
+
+        -- 2) Gamepad thumbstick (mapeamento comum: Y negativo = frente)
+        if gamepadStick.Magnitude > 0.01 then
+            inputX = gamepadStick.X
+            inputZ = -gamepadStick.Y
+            if invertForward then inputZ = -inputZ end
+            if invertRight then inputX = -inputX end
+            local mag = math.sqrt(inputX*inputX + inputZ*inputZ)
+            if mag > 1 then
+                inputX = inputX / mag
+                inputZ = inputZ / mag
+            end
+            return inputX, inputZ
+        end
+
+        -- 3) Teclado WASD
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then inputZ = inputZ + 1 end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then inputZ = inputZ - 1 end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then inputX = inputX + 1 end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then inputX = inputX - 1 end
+
+        if invertForward then inputZ = -inputZ end
+        if invertRight then inputX = -inputX end
+
+        local mag = math.sqrt(inputX*inputX + inputZ*inputZ)
+        if mag > 1 then
+            inputX = inputX / mag
+            inputZ = inputZ / mag
+        end
+
+        return inputX, inputZ
+    end
+
+    -- Loop principal com correção de lateralidade e ajuste instantâneo de rotação (inclui pitch)
+    RunService.RenderStepped:Connect(function(dt)
+        if flying and rootPart and bv and bg and cam then
+            local ix, iz = getInputAxes()
+
+            local camLook = cam.CFrame.LookVector
+            local forward = camLook
+            if forward.Magnitude > 0 then forward = forward.Unit end
+
+            local camRight = cam.CFrame.RightVector
+            local right = Vector3.new(camRight.X, 0, camRight.Z)
+            if right.Magnitude > 0 then right = right.Unit end
+
+            local worldDir = (forward * iz) + (right * ix)
+            if worldDir.Magnitude > 0 then
+                worldDir = worldDir.Unit
+            else
+                worldDir = Vector3.new(0,0,0)
             end
 
-            flyBtn.Text = "FLY OFF"
-            flyBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-            addLog("Fly desativado")
-        end)
+            local speed = FLIGHT_BASE_SPEED * (sprinting and SPRINT_MULT or 1)
+            local horiz = Vector3.new(worldDir.X, 0, worldDir.Z) * speed
+
+            -- vertical: prioridade para input direto (space / touch), senão usa componente Y do look * inputZ
+            local vy = 0
+            if verticalTarget > 0 then
+                vy = ASCEND_SPEED
+            elseif verticalTarget < 0 then
+                vy = -ASCEND_SPEED
+            else
+                vy = 0
+            end
+
+            local desiredY
+            if math.abs(forward.Y) > 0.001 and math.abs(iz) > 0.001 then
+                desiredY = math.clamp(forward.Y * iz * speed, -ASCEND_SPEED, ASCEND_SPEED)
+            else
+                desiredY = vy
+            end
+
+            targetVelocity = Vector3.new(horiz.X, desiredY, horiz.Z)
+
+            -- suavização dependente de frame-rate (melhora resposta)
+            local alpha = 1 - math.exp(-SMOOTHNESS * math.max(dt, 0.001) * 60)
+            currentVelocity = currentVelocity:Lerp(targetVelocity, math.clamp(alpha, 0, 1))
+            bv.Velocity = currentVelocity
+
+            -- Atualiza BodyGyro para olhar exatamente na direção da câmera (inclui pitch)
+            bg.CFrame = CFrame.new(rootPart.Position, rootPart.Position + cam.CFrame.LookVector)
+
+            -- Sincroniza a velocidade física para evitar "puxões" e zera rotação residual
+            if rootPart:IsA("BasePart") then
+                rootPart.AssemblyLinearVelocity = bv.Velocity
+                rootPart.RotVelocity = Vector3.new(0, 0, 0)
+            end
+        end
+    end)
+
+    -- Respawn / inicialização
+    player.CharacterAdded:Connect(function(char)
+        wait(0.35)
+        -- ensure fly is stopped on respawn; do NOT auto-start
+        stopFly()
+    end)
+
+    -- Do NOT auto-start fly on script load; user must press the button
+    if player.Character then
+        wait(0.35)
+        stopFly()
     end
+
+    player.AncestryChanged:Connect(function()
+        if not player:IsDescendantOf(game) then
+            stopFly()
+        end
+    end)
 
     -- ===== UI Interactions (draggable corrigido) =====
     local dragging = false
@@ -1204,10 +1461,16 @@ task.spawn(function()
         val = math.clamp(val, 0, WALK_SPEED_LIMIT)
         savedWalkSpeed = val
         player:SetAttribute("SavedWalkSpeed", savedWalkSpeed)
+
+        -- Also update flight base speed: use a multiplier so flight remains noticeably faster.
+        -- Ajuste o multiplicador aqui se quiser outro comportamento.
+        local multiplier = 5
+        FLIGHT_BASE_SPEED = math.clamp(savedWalkSpeed * multiplier, 10, 1000)
+
         if not bypassActive then
             enforceMovement()
         end
-        addLog("WalkSpeed definido para " .. tostring(savedWalkSpeed))
+        addLog("WalkSpeed definido para " .. tostring(savedWalkSpeed) .. " (Flight speed = " .. tostring(FLIGHT_BASE_SPEED) .. ")")
     end)
 
     applyJhCheck.MouseButton1Click:Connect(function()
@@ -1222,44 +1485,6 @@ task.spawn(function()
     end)
 
     -- ===== Reset modificado: reseta para os defaults detectados do jogo atual =====
-    local function computeJumpHeightFromPower(jumpPower)
-        local gravity = Workspace.Gravity or 196.2
-        if type(jumpPower) ~= "number" or jumpPower <= 0 then return nil end
-        return (jumpPower * jumpPower) / (2 * gravity)
-    end
-
-    local function captureGameDefaultsIfMissing()
-        local savedWS, savedJH = getSavedDefaultsForPlace()
-        if savedWS and savedJH then
-            return savedWS, savedJH
-        end
-
-        local char = player.Character
-        if not char then
-            char = player.Character or player.CharacterAdded:Wait()
-        end
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            local detectedWS = hum.WalkSpeed or nil
-            local detectedJH = nil
-            if hum.JumpHeight and type(hum.JumpHeight) == "number" and hum.JumpHeight > 0 then
-                detectedJH = hum.JumpHeight
-            else
-                if hum.JumpPower and type(hum.JumpPower) == "number" and hum.JumpPower > 0 then
-                    detectedJH = computeJumpHeightFromPower(hum.JumpPower)
-                end
-            end
-
-            if detectedWS and type(detectedWS) == "number" and detectedJH and type(detectedJH) == "number" then
-                setSavedDefaultsForPlace(detectedWS, detectedJH)
-                return detectedWS, detectedJH
-            end
-        end
-
-        setSavedDefaultsForPlace(savedWalkSpeed, savedJumpHeight)
-        return savedWalkSpeed, savedJumpHeight
-    end
-
     resetBtn.MouseButton1Click:Connect(function()
         local defaultWS, defaultJH = captureGameDefaultsIfMissing()
         if defaultWS and defaultJH then
@@ -1269,6 +1494,10 @@ task.spawn(function()
             jhBox.Text = tostring(savedJumpHeight)
             player:SetAttribute("SavedWalkSpeed", savedWalkSpeed)
             player:SetAttribute("SavedJumpHeight", savedJumpHeight)
+
+            -- update flight speed accordingly
+            FLIGHT_BASE_SPEED = math.clamp(savedWalkSpeed * 5, 10, 1000)
+
             if not bypassActive then
                 enforceMovement()
             end
@@ -1298,6 +1527,9 @@ task.spawn(function()
 
         wsBox.Text = tostring(savedWalkSpeed)
         jhBox.Text = tostring(savedJumpHeight)
+
+        -- set flight speed based on saved walk speed
+        FLIGHT_BASE_SPEED = math.clamp(savedWalkSpeed * 5, 10, 1000)
 
         if not bypassActive then
             enforceMovement()
@@ -1336,6 +1568,7 @@ task.spawn(function()
         speedHist[plr] = nil
         sustainedCount[plr] = nil
         suspectTimers[plr] = nil
+        stopHighlightEnforcerForPlayer(plr)
     end)
 
     for _, plr in ipairs(Players:GetPlayers()) do
@@ -1383,6 +1616,11 @@ task.spawn(function()
             disableHighlightsForAll()
             revertHitboxes()
             disconnectAllHumanoidWatchers()
+            -- disconnect any remaining highlight enforcers
+            for plr, conn in pairs(highlightEnforcerConnections) do
+                if conn then conn:Disconnect() end
+                highlightEnforcerConnections[plr] = nil
+            end
         end
     end)
 
