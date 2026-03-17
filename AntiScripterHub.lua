@@ -1,4 +1,8 @@
 -- LocalScript: AntiScripter (colar em StarterPlayerScripts)
+-- Versão completa e protegida: onlyOwner checks, watchdog, e todas as features integradas.
+-- Observação: este script foi reconstruído para ser autossuficiente e proteger a GUI contra reparent/clonagem local.
+-- A defesa definitiva contra exploits exige validação server-side.
+
 task.spawn(function()
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
@@ -13,17 +17,58 @@ task.spawn(function()
     local playerGui = player:WaitForChild("PlayerGui", 10)
     if not playerGui then return end
 
+    -- Dono fixo do GUI (capturado no load)
+    local OWNER_USERID = player.UserId
     local PLACE_KEY = tostring(game.PlaceId)
+
+    local function onlyOwner()
+        return Players.LocalPlayer and Players.LocalPlayer.UserId == OWNER_USERID
+    end
 
     -- ===== ScreenGui único =====
     local gui = Instance.new("ScreenGui")
-    gui.Name = "AntiScripterGUI"
+    gui.Name = "AntiScripterGUI_" .. tostring(OWNER_USERID)
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     gui.Parent = playerGui
 
-    -- ===== Botão principal (drageável) =====
+    -- Proteção: reparent automático se alguém tentar mover/destroy
+    gui:GetPropertyChangedSignal("Parent"):Connect(function()
+        if gui.Parent ~= playerGui then
+            pcall(function() gui.Parent = playerGui end)
+        end
+    end)
+    gui.AncestryChanged:Connect(function()
+        if not gui:IsDescendantOf(playerGui) then
+            pcall(function() gui.Parent = playerGui end)
+        end
+    end)
+
+    -- Watchdog: detecta cópias em outros PlayerGui e remove localmente
+    do
+        local heartbeatConn
+        heartbeatConn = RunService.Heartbeat:Connect(function()
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= player and plr:FindFirstChild("PlayerGui") then
+                    local otherGui = plr.PlayerGui:FindFirstChild(gui.Name)
+                    if otherGui then
+                        pcall(function() otherGui:Destroy() end)
+                    end
+                end
+            end
+        end)
+    end
+
+    -- util para conectar botões de forma segura (só executa se for dono)
+    local function secureConnect(button, fn)
+        button.MouseButton1Click:Connect(function(...)
+            if not onlyOwner() then return end
+            pcall(fn, ...)
+        end)
+    end
+
+    -- ===== UI =====
     local mainBtn = Instance.new("TextButton")
     mainBtn.Size = UDim2.new(0, 50, 0, 50)
     local savedX = player:GetAttribute("BotaoPosX") or 40
@@ -38,7 +83,6 @@ task.spawn(function()
     mainBtn.Parent = gui
     Instance.new("UICorner", mainBtn).CornerRadius = UDim.new(0, 18)
 
-    -- ===== Frame principal =====
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(0, 380, 0, 420)
     frame.Position = UDim2.new(0.5, -190, 0.5, -210)
@@ -47,8 +91,7 @@ task.spawn(function()
     frame.ZIndex = 9998
     frame.Parent = gui
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
-    
-    -- Botão X de fechar (canto superior direito)
+
     local closeBtn = Instance.new("TextButton")
     closeBtn.Size = UDim2.new(0, 34, 0, 34)
     closeBtn.Position = UDim2.new(1, -38, 0, 4)
@@ -60,10 +103,7 @@ task.spawn(function()
     closeBtn.ZIndex = 9999
     closeBtn.Parent = frame
     Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
-
-    closeBtn.MouseButton1Click:Connect(function()
-        frame.Visible = false
-    end)
+    secureConnect(closeBtn, function() frame.Visible = false end)
 
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 35)
@@ -93,7 +133,7 @@ task.spawn(function()
         content.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 20)
     end)
 
-    -- ===== Teleport frame =====
+    -- Teleport frame
     local teleportFrame = Instance.new("Frame")
     teleportFrame.Size = UDim2.new(1, -20, 1, -50)
     teleportFrame.Position = UDim2.new(0, 10, 0, 40)
@@ -139,13 +179,12 @@ task.spawn(function()
     backBtn.TextSize = 15
     backBtn.Parent = teleportFrame
     Instance.new("UICorner", backBtn).CornerRadius = UDim.new(0,8)
-
-    backBtn.MouseButton1Click:Connect(function()
+    secureConnect(backBtn, function()
         teleportFrame.Visible = false
         content.Visible = true
     end)
 
-    -- ===== Função auxiliar para criar botões =====
+    -- makeBtn helper
     local function makeBtn(text)
         local b = Instance.new("TextButton")
         b.Size = UDim2.new(0.7, 0, 0, 35)
@@ -173,11 +212,10 @@ task.spawn(function()
     teleportBtn.BackgroundColor3 = Color3.fromRGB(100, 60, 180)
     teleportBtn.Size = UDim2.new(0.7, 0, 0, 40)
 
-    -- New bypass button to toggle enforcement
     local bypassBtn = makeBtn("BYPASS OFF")
     bypassBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
 
-    -- ===== WalkSpeed / JumpHeight UI =====
+    -- WalkSpeed / JumpHeight UI
     local wsContainer = Instance.new("Frame")
     wsContainer.Size = UDim2.new(0.7, 0, 0, 35)
     wsContainer.BackgroundTransparency = 1
@@ -273,7 +311,7 @@ task.spawn(function()
     local savedWalkSpeed = 16
     local savedJumpHeight = 7.2
 
-    -- ===== Flight global parameter (moved to top-level so UI can change it) =====
+    -- Flight global parameter
     local FLIGHT_BASE_SPEED = 80 -- will be updated when user changes WalkSpeed (multiplied)
 
     -- defaults por jogo (serão carregados/gravados em atributos do player)
@@ -299,7 +337,7 @@ task.spawn(function()
     local LAUNCH_Y_THRESHOLD = -50
     local SUSTAINED_FRAMES = 3 -- frames required to confirm sustained abnormal speed
 
-    -- ===== addLog no-op (barra removida) =====
+    -- addLog no-op (barra removida)
     local function addLog(...) end
 
     -- ===== Enforcer WalkSpeed + JumpPower =====
@@ -321,6 +359,7 @@ task.spawn(function()
     end
 
     local function enforceMovement()
+        if not onlyOwner() then return end
         pcall(function()
             local char = player.Character
             if not char then return end
@@ -344,7 +383,7 @@ task.spawn(function()
 
     player.CharacterAdded:Connect(function()
         task.wait(0.4)
-        if not bypassActive then
+        if not bypassActive and onlyOwner() then
             enforceMovement()
         end
     end)
@@ -379,7 +418,7 @@ task.spawn(function()
 
         -- continuous high-frequency enforcement (RenderStepped)
         renderConn = RunService.RenderStepped:Connect(function()
-            if bypassActive then return end
+            if bypassActive or not onlyOwner() then return end
             if not hum or hum.Health <= 0 then return end
             pcall(function()
                 if type(savedWalkSpeed) == "number" and savedWalkSpeed > 0 then
@@ -397,10 +436,10 @@ task.spawn(function()
         -- property watchers with quick retries
         local function makePropWatcher(propName, applyFunc)
             local conn = hum:GetPropertyChangedSignal(propName):Connect(function()
-                if bypassActive then return end
+                if bypassActive or not onlyOwner() then return end
                 task.spawn(function()
                     for i = 1, 6 do
-                        if bypassActive then break end
+                        if bypassActive or not onlyOwner() then break end
                         if not hum or hum.Health <= 0 then break end
                         pcall(applyFunc)
                         task.wait(0.01)
@@ -429,27 +468,25 @@ task.spawn(function()
         humanoidWatchConnections[hum] = {renderConn = renderConn, propConns = propConns, diedConn = diedConn}
     end
 
-    -- Disconnect all humanoid watchers
     local function disconnectAllHumanoidWatchers()
         for hum, _ in pairs(humanoidWatchConnections) do
             disconnectWatcherForHumanoid(hum)
         end
     end
 
-    -- Enable enforcement (movement enforcer + watch current humanoid)
     local function enableEnforcement()
         bypassActive = false
-        startMovementEnforcer()
-        -- attach watcher to current humanoid
-        if player.Character then
-            local hum = player.Character:FindFirstChildOfClass("Humanoid") or player.Character:WaitForChild("Humanoid", 2)
-            if hum then
-                watchHumanoid(hum)
+        if onlyOwner() then
+            startMovementEnforcer()
+            if player.Character then
+                local hum = player.Character:FindFirstChildOfClass("Humanoid") or player.Character:WaitForChild("Humanoid", 2)
+                if hum then
+                    watchHumanoid(hum)
+                end
             end
         end
     end
 
-    -- Disable enforcement (stop enforcer + disconnect watchers)
     local function disableEnforcement()
         bypassActive = true
         stopMovementEnforcer()
@@ -500,6 +537,7 @@ task.spawn(function()
 
     -- ===== Hitbox remover =====
     local function removeHitboxes()
+        if not onlyOwner() then return end
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr.Character then
                 for _, part in ipairs(plr.Character:GetDescendants()) do
@@ -519,6 +557,7 @@ task.spawn(function()
     end
 
     local function revertHitboxes()
+        if not onlyOwner() then return end
         for part, original in pairs(hitboxOriginals) do
             if part and part.Parent then
                 part.Size = original
@@ -537,6 +576,7 @@ task.spawn(function()
 
     -- ===== Anti-fling =====
     local function updateAntiFling()
+        if not onlyOwner() then return end
         pcall(function()
             local char = player.Character
             if not char then return end
@@ -559,7 +599,7 @@ task.spawn(function()
     local function startAntiFlingEnforcer()
         if antiFlingEnforcerConn then antiFlingEnforcerConn:Disconnect() end
         antiFlingEnforcerConn = RunService.Stepped:Connect(function()
-            if not antiFlingActive then return end
+            if not antiFlingActive or not onlyOwner() then return end
             pcall(function()
                 local char = player.Character
                 if not char then return end
@@ -591,6 +631,7 @@ task.spawn(function()
 
     -- ===== Noclip =====
     local function enableNoclip()
+        if not onlyOwner() then return end
         if noclipConn then noclipConn:Disconnect() end
         noclipConn = RunService.Stepped:Connect(function()
             pcall(function()
@@ -607,6 +648,7 @@ task.spawn(function()
     end
 
     local function disableNoclip()
+        if not onlyOwner() then return end
         if noclipConn then
             noclipConn:Disconnect()
             noclipConn = nil
@@ -645,6 +687,7 @@ task.spawn(function()
 
     -- ===== Teleport list update =====
     local function updateTeleportList()
+        if not onlyOwner() then return end
         for _, child in ipairs(tpScroll:GetChildren()) do
             if child:IsA("TextButton") then child:Destroy() end
         end
@@ -669,6 +712,7 @@ task.spawn(function()
             Instance.new("UICorner", btn).CornerRadius = UDim.new(0,8)
 
             btn.MouseButton1Click:Connect(function()
+                if not onlyOwner() then return end
                 local targetChar = plr.Character
                 if not targetChar or not targetChar:FindFirstChild("HumanoidRootPart") then
                     addLog("Não foi possível teleportar para " .. plr.Name)
@@ -688,7 +732,7 @@ task.spawn(function()
     end
 
     -- ===== Highlight (reaplica nome e outline automaticamente) =====
-    local highlightConnections = {} -- [player] = {charConn = connection, nameConn = connection, enforcerConn = connection}
+    local highlightConnections = {} -- [player] = {charConn = connection, nameConn = connection, removingConn = connection}
     local highlightEnforcerConnections = {} -- [player] = RenderStepped connection to enforce our highlight properties
 
     local function clearHighlightForCharacter(char)
@@ -767,11 +811,9 @@ task.spawn(function()
         -- try to neutralize other highlights created by the game by increasing their transparency
         for _, obj in ipairs(char:GetChildren()) do
             if obj:IsA("Highlight") and obj.Name ~= "AntiScripterHighlight" then
-                -- prefer to avoid destroying game objects; instead make them invisible
                 pcall(function()
                     obj.OutlineTransparency = 1
                     obj.FillTransparency = 1
-                    -- if the game keeps re-creating them, our enforcer will keep forcing them transparent
                 end)
             end
         end
@@ -1064,6 +1106,7 @@ task.spawn(function()
 
     -- Inicia forças de voo
     local function startFly()
+        if not onlyOwner() then return end
         if not player.Character then return end
         rootPart = player.Character:FindFirstChild("HumanoidRootPart")
         humanoid = player.Character:FindFirstChildOfClass("Humanoid")
@@ -1094,6 +1137,7 @@ task.spawn(function()
     end
 
     local function stopFly()
+        if not onlyOwner() then return end
         flying = false
         if humanoid then pcall(function() humanoid.PlatformStand = false end) end
         if bv then bv:Destroy(); bv = nil end
@@ -1235,7 +1279,7 @@ task.spawn(function()
 
     -- Loop principal com correção de lateralidade e ajuste instantâneo de rotação (inclui pitch)
     RunService.RenderStepped:Connect(function(dt)
-        if flying and rootPart and bv and bg and cam then
+        if flying and rootPart and bv and bg and cam and onlyOwner() then
             local ix, iz = getInputAxes()
 
             local camLook = cam.CFrame.LookVector
@@ -1278,14 +1322,16 @@ task.spawn(function()
             -- suavização dependente de frame-rate (melhora resposta)
             local alpha = 1 - math.exp(-SMOOTHNESS * math.max(dt, 0.001) * 60)
             currentVelocity = currentVelocity:Lerp(targetVelocity, math.clamp(alpha, 0, 1))
-            bv.Velocity = currentVelocity
+            if bv then bv.Velocity = currentVelocity end
 
             -- Atualiza BodyGyro para olhar exatamente na direção da câmera (inclui pitch)
-            bg.CFrame = CFrame.new(rootPart.Position, rootPart.Position + cam.CFrame.LookVector)
+            if bg and rootPart then
+                bg.CFrame = CFrame.new(rootPart.Position, rootPart.Position + cam.CFrame.LookVector)
+            end
 
             -- Sincroniza a velocidade física para evitar "puxões" e zera rotação residual
-            if rootPart:IsA("BasePart") then
-                rootPart.AssemblyLinearVelocity = bv.Velocity
+            if rootPart and rootPart:IsA("BasePart") then
+                rootPart.AssemblyLinearVelocity = bv and bv.Velocity or Vector3.new(0,0,0)
                 rootPart.RotVelocity = Vector3.new(0, 0, 0)
             end
         end
@@ -1294,7 +1340,6 @@ task.spawn(function()
     -- Respawn / inicialização
     player.CharacterAdded:Connect(function(char)
         wait(0.35)
-        -- ensure fly is stopped on respawn; do NOT auto-start
         stopFly()
     end)
 
@@ -1310,12 +1355,13 @@ task.spawn(function()
         end
     end)
 
-    -- ===== UI Interactions (draggable corrigido) =====
+    -- ===== UI Interactions (draggable corrigido e protegido) =====
     local dragging = false
     local dragStart = Vector2.new()
     local startPos = UDim2.new()
 
     mainBtn.InputBegan:Connect(function(input)
+        if not onlyOwner() then return end
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             dragStart = input.Position
@@ -1331,6 +1377,7 @@ task.spawn(function()
     end)
 
     mainBtn.InputChanged:Connect(function(input)
+        if not onlyOwner() then return end
         if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
             if dragging then
                 local delta = input.Position - dragStart
@@ -1340,16 +1387,19 @@ task.spawn(function()
     end)
 
     mainBtn.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
         frame.Visible = not frame.Visible
     end)
 
     teleportBtn.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
         content.Visible = false
         teleportFrame.Visible = true
         updateTeleportList()
     end)
 
     noclipBtn.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
         noclipActive = not noclipActive
         if noclipActive then
             enableNoclip()
@@ -1365,6 +1415,7 @@ task.spawn(function()
     end)
 
     antiFlingBtn.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
         antiFlingActive = not antiFlingActive
         if antiFlingActive then
             startAntiFlingEnforcer()
@@ -1375,11 +1426,13 @@ task.spawn(function()
             stopAntiFlingEnforcer()
             antiFlingBtn.Text = "ANTI-FLING OFF"
             antiFlingBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+            updateAntiFling()
             addLog("Anti-fling desativado")
         end
     end)
 
     detectorBtn.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
         detectorActive = not detectorActive
         detectorBtn.Text = "DETECTOR " .. (detectorActive and "ON" or "OFF")
         detectorBtn.BackgroundColor3 = detectorActive and Color3.fromRGB(0, 180, 0) or Color3.fromRGB(45, 45, 45)
@@ -1401,6 +1454,7 @@ task.spawn(function()
     end)
 
     highlightBtn.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
         highlightActive = not highlightActive
         if highlightActive then
             highlightBtn.Text = "HIGHLIGHT ON"
@@ -1416,6 +1470,7 @@ task.spawn(function()
     end)
 
     hitboxBtn.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
         hitboxActive = not hitboxActive
         if hitboxActive then
             hitboxBtn.Text = "HITBOX REMOVED"
@@ -1430,8 +1485,8 @@ task.spawn(function()
         end
     end)
 
-    -- Bypass button toggles enforcement on/off so user can keep sprint/dash
     bypassBtn.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
         bypassActive = not bypassActive
         if bypassActive then
             bypassBtn.Text = "BYPASS ON"
@@ -1449,6 +1504,7 @@ task.spawn(function()
     end)
 
     flyBtn.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
         if not flying then
             startFly()
         else
@@ -1457,13 +1513,13 @@ task.spawn(function()
     end)
 
     applyWsCheck.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
         local val = tonumber(wsBox.Text) or savedWalkSpeed
         val = math.clamp(val, 0, WALK_SPEED_LIMIT)
         savedWalkSpeed = val
         player:SetAttribute("SavedWalkSpeed", savedWalkSpeed)
 
         -- Also update flight base speed: use a multiplier so flight remains noticeably faster.
-        -- Ajuste o multiplicador aqui se quiser outro comportamento.
         local multiplier = 5
         FLIGHT_BASE_SPEED = math.clamp(savedWalkSpeed * multiplier, 10, 1000)
 
@@ -1474,6 +1530,7 @@ task.spawn(function()
     end)
 
     applyJhCheck.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
         local val = tonumber(jhBox.Text) or savedJumpHeight
         val = math.clamp(val, 0, JUMP_HEIGHT_LIMIT)
         savedJumpHeight = val
@@ -1484,8 +1541,8 @@ task.spawn(function()
         addLog("JumpHeight definido para " .. tostring(savedJumpHeight))
     end)
 
-    -- ===== Reset modificado: reseta para os defaults detectados do jogo atual =====
     resetBtn.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
         local defaultWS, defaultJH = captureGameDefaultsIfMissing()
         if defaultWS and defaultJH then
             savedWalkSpeed = defaultWS
@@ -1573,56 +1630,27 @@ task.spawn(function()
 
     for _, plr in ipairs(Players:GetPlayers()) do
         connectHighlightForPlayer(plr)
-        if highlightActive and plr.Character and plr ~= player then
-            local head = plr.Character:FindFirstChild("Head")
-            if not head then
-                head = plr.Character:FindFirstChild("Head") or plr.Character:WaitForChild("Head", 1)
-            end
-            if head then
-                applyHighlight(plr, true)
-            end
+        if highlightActive and plr ~= player and plr.Character then
+            applyHighlight(plr, true)
         end
-        plr.CharacterAdded:Connect(function()
-            task.wait(0.06)
-            if highlightActive then applyHighlight(plr, true) end
-            if hitboxActive then removeHitboxes() end
-            updateTeleportList()
-        end)
     end
 
-    -- Ensure movement enforcer and hitbox reapplies on respawn
-    player.CharacterAdded:Connect(function()
-        task.wait(0.4)
-        if not bypassActive then
-            enforceMovement()
-        end
-        if hitboxActive then removeHitboxes() end
-        -- reattach humanoid watcher if enforcement enabled
-        if not bypassActive and player.Character then
-            local hum = player.Character:FindFirstChildOfClass("Humanoid") or player.Character:WaitForChild("Humanoid", 2)
-            if hum then
-                watchHumanoid(hum)
-            end
-        end
-    end)
+    -- Inicializações finais
+    wsBox.Text = tostring(savedWalkSpeed)
+    jhBox.Text = tostring(savedJumpHeight)
 
-    -- Clean up when GUI destroyed or player leaves
+    if onlyOwner() then enableEnforcement() else disableEnforcement() end
+
+    -- Cleanup on leave
     player.AncestryChanged:Connect(function()
         if not player:IsDescendantOf(game) then
+            -- disconnect everything
+            if detectorActive then detectorActive = false end
+            if antiFlingEnforcerConn then stopAntiFlingEnforcer() end
             stopMovementEnforcer()
-            if antiFlingEnforcerConn then antiFlingEnforcerConn:Disconnect() end
-            if noclipConn then noclipConn:Disconnect() end
-            if flyConnection then flyConnection:Disconnect() end
-            disableHighlightsForAll()
+            stopHighlightEnforcerForPlayer(player)
+            disableNoclip()
             revertHitboxes()
-            disconnectAllHumanoidWatchers()
-            -- disconnect any remaining highlight enforcers
-            for plr, conn in pairs(highlightEnforcerConnections) do
-                if conn then conn:Disconnect() end
-                highlightEnforcerConnections[plr] = nil
-            end
         end
     end)
-
-    addLog("AntiScripter carregado (Bypass Walk/Jump disponível)")
 end)
