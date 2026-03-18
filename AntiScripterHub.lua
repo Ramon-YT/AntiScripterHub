@@ -1,8 +1,3 @@
--- LocalScript: AntiScripter (colar em StarterPlayerScripts)
--- Versão completa e protegida: onlyOwner checks, watchdog, e todas as features integradas.
--- Observação: este script foi reconstruído para ser autossuficiente e proteger a GUI contra reparent/clonagem local.
--- A defesa definitiva contra exploits exige validação server-side.
-
 task.spawn(function()
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
@@ -83,16 +78,14 @@ task.spawn(function()
     mainBtn.ZIndex = 10000
     mainBtn.Parent = gui
     Instance.new("UICorner", mainBtn).CornerRadius = UDim.new(0, 18)
-    
-    -- ✅ Adicione isso logo depois da linha do UICorner do mainBtn:
 
-local mainStroke = Instance.new("UIStroke")
-mainStroke.Thickness = 3                  -- espessura da borda (2 a 4 fica ótimo)
-mainStroke.Color = Color3.fromRGB(15, 15, 15)   -- cor neon ciano (pode mudar)
-mainStroke.Transparency = 0
-mainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border   -- ← ESSA LINHA faz a borda ficar "nas bordas" (externa)
-mainStroke.LineJoinMode = Enum.LineJoinMode.Round          -- cantos arredondados perfeitos
-mainStroke.Parent = mainBtn
+    local mainStroke = Instance.new("UIStroke")
+    mainStroke.Thickness = 3
+    mainStroke.Color = Color3.fromRGB(15, 15, 15)
+    mainStroke.Transparency = 0
+    mainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    mainStroke.LineJoinMode = Enum.LineJoinMode.Round
+    mainStroke.Parent = mainBtn
 
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(0, 500, 0, 350)
@@ -306,8 +299,9 @@ mainStroke.Parent = mainBtn
     applyBtn.Parent = walkJumpFrame
     Instance.new("UICorner", applyBtn).CornerRadius = UDim.new(0, 8)
 
+    -- Ajuste de layout: dois botões lado a lado (Bypass e Velocity)
     local bypassBtnWJ = Instance.new("TextButton")
-    bypassBtnWJ.Size = UDim2.new(0.6, 0, 0, 35)
+    bypassBtnWJ.Size = UDim2.new(0.28, 0, 0, 35)
     bypassBtnWJ.Position = UDim2.new(0.2, 0, 0, 220)
     bypassBtnWJ.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
     bypassBtnWJ.Text = "BYPASS ON"
@@ -316,6 +310,17 @@ mainStroke.Parent = mainBtn
     bypassBtnWJ.Font = Enum.Font.GothamBold
     bypassBtnWJ.Parent = walkJumpFrame
     Instance.new("UICorner", bypassBtnWJ).CornerRadius = UDim.new(0, 8)
+
+    local velocityBtnWJ = Instance.new("TextButton")
+    velocityBtnWJ.Size = UDim2.new(0.28, 0, 0, 35)
+    velocityBtnWJ.Position = UDim2.new(0.52, 0, 0, 220)
+    velocityBtnWJ.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    velocityBtnWJ.Text = "VELOCITY OFF"
+    velocityBtnWJ.TextColor3 = Color3.new(1,1,1)
+    velocityBtnWJ.TextSize = 15
+    velocityBtnWJ.Font = Enum.Font.GothamBold
+    velocityBtnWJ.Parent = walkJumpFrame
+    Instance.new("UICorner", velocityBtnWJ).CornerRadius = UDim.new(0, 8)
 
     local resetBtnWJ = Instance.new("TextButton")
     resetBtnWJ.Size = UDim2.new(0.6, 0, 0, 35)
@@ -351,6 +356,7 @@ mainStroke.Parent = mainBtn
     local highlightActive = false
     local hitboxActive = false
     local bypassActive = false
+    local velocityActive = false
 
     local noclipConn = nil
     local antiFlingEnforcerConn = nil
@@ -358,6 +364,9 @@ mainStroke.Parent = mainBtn
     local hitboxOriginals = {}
     local hitboxOriginalTransparency = {}
     local hitboxOriginalCanCollide = {}
+
+    local velocityConn = nil
+    local velocityDeathConn = nil
 
     local savedWalkSpeed = 16
     local savedJumpHeight = 7.2
@@ -392,8 +401,11 @@ mainStroke.Parent = mainBtn
     local function enforceMovementOnHumanoid(hum)
         if not hum then return end
         pcall(function()
-            if type(savedWalkSpeed) == "number" and savedWalkSpeed > 0 then
-                hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
+            -- Se velocityActive estiver ligado, não forçamos WalkSpeed no humanoid
+            if not velocityActive then
+                if type(savedWalkSpeed) == "number" and savedWalkSpeed > 0 then
+                    hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
+                end
             end
 
             if type(savedJumpHeight) == "number" and savedJumpHeight >= 0 then
@@ -463,8 +475,10 @@ mainStroke.Parent = mainBtn
             if bypassActive or not onlyOwner() then return end
             if not hum or hum.Health <= 0 then return end
             pcall(function()
-                if type(savedWalkSpeed) == "number" and savedWalkSpeed > 0 then
-                    hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
+                if not velocityActive then
+                    if type(savedWalkSpeed) == "number" and savedWalkSpeed > 0 then
+                        hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
+                    end
                 end
                 if type(savedJumpHeight) == "number" and savedJumpHeight >= 0 then
                     local gravity = Workspace.Gravity or 196.2
@@ -491,7 +505,9 @@ mainStroke.Parent = mainBtn
         end
 
         makePropWatcher("WalkSpeed", function()
-            hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
+            if not velocityActive then
+                hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
+            end
         end)
         makePropWatcher("JumpPower", function()
             local gravity = Workspace.Gravity or 196.2
@@ -678,6 +694,7 @@ mainStroke.Parent = mainBtn
         end)
     end
 
+    -- NOVA disableNoclip: sem raycast, sem teleporte para cima; apenas restaura colisões e zera velocidades
     local function disableNoclip()
         if not onlyOwner() then return end
         if noclipConn then
@@ -689,30 +706,41 @@ mainStroke.Parent = mainBtn
             local char = player.Character
             if not char then return end
 
-            for i = 1, 4 do
+            -- Restaurar colisões dos parts em múltiplas passagens
+            for i = 1, 6 do
                 for _, part in ipairs(char:GetDescendants()) do
                     if part:IsA("BasePart") then
                         part.CanCollide = true
                     end
                 end
-                task.wait()
+                task.wait(0.02)
             end
 
             local root = char:FindFirstChild("HumanoidRootPart")
+            local hum = char:FindFirstChildOfClass("Humanoid")
+
+            -- Zerando velocidades residuais (horizontal e angular)
             if root then
-                root.AssemblyLinearVelocity = Vector3.new(0,0,0)
-                root.AssemblyAngularVelocity = Vector3.new(0,0,0)
-                root.Velocity = Vector3.new(0,0,0)
+                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                root.Velocity = Vector3.new(0, 0, 0)
+                root.RotVelocity = Vector3.new(0, 0, 0)
             end
 
-            local hum = char:FindFirstChildOfClass("Humanoid")
             if hum then
+                -- Forçar estados que ajudam a "assentar" o personagem
+                pcall(function() hum.PlatformStand = false end)
+                hum.Sit = false
+                hum.AutoRotate = true
                 hum:ChangeState(Enum.HumanoidStateType.Physics)
-                task.wait(0.05)
+                task.wait(0.06)
                 hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-                task.wait(0.05)
+                task.wait(0.06)
                 hum:ChangeState(Enum.HumanoidStateType.Running)
             end
+
+            -- Não reposicionamos o jogador (sem nudge/teleport) para evitar revelar posição.
+            -- Apenas garantimos que colisões e velocidades foram restauradas e que o humanoid está em estado normal.
         end)
     end
 
@@ -757,7 +785,7 @@ mainStroke.Parent = mainBtn
         end
     end
 
-    -- Highlight, Detector, Suspect (mantidos iguais)
+    -- ===== Highlight, Detector, Suspect (mantidos iguais) =====
     local highlightConnections = {}
     local highlightEnforcerConnections = {}
 
@@ -1082,7 +1110,6 @@ mainStroke.Parent = mainBtn
     end)
 
     -- ===== FLY CORRIGIDO: velocidade vertical AGORA USA A MESMA VELOCIDADE TOTAL =====
-    -- (quando olhar 90° para cima/baixo + mover para frente, velocidade vertical = velocidade horizontal completa)
     local cam = workspace.CurrentCamera
 
     local SPRINT_MULT = 1.6
@@ -1296,7 +1323,7 @@ mainStroke.Parent = mainBtn
 
             local desiredY
             if math.abs(forward.Y) > 0.001 and math.abs(iz) > 0.001 then
-                desiredY = forward.Y * iz * speed   -- <--- REMOVIDO CLAMP → agora sobe/desce na velocidade completa
+                desiredY = forward.Y * iz * speed
             else
                 desiredY = vy
             end
@@ -1321,6 +1348,49 @@ mainStroke.Parent = mainBtn
     player.CharacterAdded:Connect(function(char)
         wait(0.35)
         stopFly()
+        -- garantir que velocity mode seja reiniciado/desligado ao respawn
+        if velocityActive then
+            -- reinicia conexão para novo root/humanoid de forma robusta
+            if velocityConn then
+                velocityConn:Disconnect(); velocityConn = nil
+            end
+            if velocityDeathConn then
+                velocityDeathConn:Disconnect(); velocityDeathConn = nil
+            end
+            -- aguarda humanoid/root existirem e reinicia o modo
+            task.delay(0.08, function()
+                if not velocityActive then return end
+                local charNow = player.Character
+                if charNow ~= char then return end
+                local root = charNow:FindFirstChild("HumanoidRootPart")
+                local hum = charNow:FindFirstChildOfClass("Humanoid")
+                local tries = 0
+                while (not root or not hum) and tries < 40 do
+                    task.wait(0.03)
+                    root = charNow:FindFirstChild("HumanoidRootPart")
+                    hum = charNow:FindFirstChildOfClass("Humanoid")
+                    tries = tries + 1
+                end
+                if root and hum and velocityActive then
+                    -- garantir estado inicial limpo
+                    pcall(function()
+                        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                        root.RotVelocity = Vector3.new(0, 0, 0)
+                        hum.PlatformStand = false
+                        hum.Sit = false
+                        hum.AutoRotate = true
+                        hum:ChangeState(Enum.HumanoidStateType.Running)
+                    end)
+                    -- reinicia o modo (stop/start para garantir limpeza)
+                    if velocityConn then
+                        velocityConn:Disconnect()
+                        velocityConn = nil
+                    end
+                    startVelocityMode()
+                end
+            end)
+        end
     end)
 
     if player.Character then
@@ -1498,8 +1568,138 @@ mainStroke.Parent = mainBtn
         if not bypassActive then
             enforceMovement()
         end
+
+        -- Se velocity mode estiver ativo, reinicia a rotina para garantir que o novo savedWalkSpeed seja usado
+        if velocityActive then
+            -- stop/start rápido para garantir leitura imediata do novo valor
+            if velocityConn then
+                velocityConn:Disconnect()
+                velocityConn = nil
+            end
+            task.delay(0, function()
+                if velocityActive then startVelocityMode() end
+            end)
+        end
+
         addLog("WalkSpeed e JumpHeight aplicados: " .. tostring(savedWalkSpeed) .. " / " .. tostring(savedJumpHeight))
     end)
+
+    -- ===== Velocity mode functions (melhoradas) =====
+    local function clearVelocityDeathWatcher()
+        if velocityDeathConn then
+            velocityDeathConn:Disconnect()
+            velocityDeathConn = nil
+        end
+    end
+
+    local function attachHumanoidDeathWatcher()
+        clearVelocityDeathWatcher()
+        local char = player.Character
+        if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        velocityDeathConn = hum.Died:Connect(function()
+            -- Ao morrer, DESATIVAR velocity automaticamente (usuário pediu)
+            -- Isso evita que o personagem "trave" após respawn; o usuário terá que reativar manualmente.
+            if velocityConn then
+                velocityConn:Disconnect()
+                velocityConn = nil
+            end
+            -- garantir que o modo seja parado e o humanoid restaurado
+            pcall(function()
+                stopVelocityMode()
+            end)
+            -- marcar como desativado e atualizar UI
+            velocityActive = false
+            if velocityBtnWJ and velocityBtnWJ:IsA("TextButton") then
+                velocityBtnWJ.Text = "VELOCITY OFF"
+                velocityBtnWJ.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+            end
+            addLog("Velocity mode desativado automaticamente após morte (reative manualmente)")
+        end)
+    end
+
+    -- startVelocityMode agora usa Heartbeat e tenta ser resiliente a mudanças de character/root
+    local function startVelocityMode()
+        if velocityConn then return end
+
+        velocityConn = RunService.Heartbeat:Connect(function(dt)
+            if not velocityActive or not onlyOwner() then return end
+
+            local char = player.Character
+            if not char then return end
+
+            local root = char:FindFirstChild("HumanoidRootPart")
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not root or not hum then return end
+
+            -- preserva componente Y atual (gravidade/queda)
+            local currentY = 0
+            local ok, av = pcall(function() return root.AssemblyLinearVelocity end)
+            if ok and av then currentY = av.Y end
+
+            -- MoveDirection é um vetor unitário local baseado na entrada do jogador
+            local md = hum.MoveDirection or Vector3.new(0,0,0)
+            local horiz = Vector3.new(md.X, 0, md.Z)
+            if horiz.Magnitude > 0 then horiz = horiz.Unit else horiz = Vector3.new(0,0,0) end
+
+            -- ler savedWalkSpeed dinamicamente a cada frame (mudanças na UI entram em efeito imediatamente)
+            local speed = math.clamp(tonumber(savedWalkSpeed) or 0, 0, WALK_SPEED_LIMIT)
+
+            -- aplicar velocidade horizontal baseada no savedWalkSpeed
+            local desiredVel = Vector3.new(horiz.X * speed, currentY, horiz.Z * speed)
+
+            -- aplicar diretamente na AssemblyLinearVelocity para "velocity mode"
+            pcall(function()
+                root.AssemblyLinearVelocity = desiredVel
+                -- garantir que não haja rotação residual
+                root.AssemblyAngularVelocity = Vector3.new(0,0,0)
+                root.RotVelocity = Vector3.new(0,0,0)
+            end)
+
+            -- reduzir conflito com Humanoid.WalkSpeed forçando um valor baixo
+            pcall(function()
+                if hum and hum.Parent then
+                    hum.WalkSpeed = 0.01
+                    hum.PlatformStand = false
+                    hum.AutoRotate = true
+                end
+            end)
+        end)
+
+        attachHumanoidDeathWatcher()
+    end
+
+    local function stopVelocityMode()
+        if velocityConn then
+            velocityConn:Disconnect()
+            velocityConn = nil
+        end
+        clearVelocityDeathWatcher()
+        -- Ao desligar, zerar componente horizontal e restaurar WalkSpeed via enforcement
+        pcall(function()
+            local char = player.Character
+            if char then
+                local root = char:FindFirstChild("HumanoidRootPart")
+                if root then
+                    local y = 0
+                    local ok, av = pcall(function() return root.AssemblyLinearVelocity end)
+                    if ok and av then y = av.Y end
+                    root.AssemblyLinearVelocity = Vector3.new(0, y, 0)
+                    root.AssemblyAngularVelocity = Vector3.new(0,0,0)
+                    root.RotVelocity = Vector3.new(0,0,0)
+                end
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
+                    hum.PlatformStand = false
+                    hum.Sit = false
+                    hum.AutoRotate = true
+                    hum:ChangeState(Enum.HumanoidStateType.Running)
+                end
+            end
+        end)
+    end
 
     bypassBtnWJ.MouseButton1Click:Connect(function()
         if not onlyOwner() then return end
@@ -1514,6 +1714,49 @@ mainStroke.Parent = mainBtn
             bypassBtnWJ.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
             enableEnforcement()
             addLog("Bypass Walk/Jump desativado (enforcement ligado)")
+        end
+    end)
+
+    velocityBtnWJ.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
+        velocityActive = not velocityActive
+        if velocityActive then
+            velocityBtnWJ.Text = "VELOCITY ON"
+            velocityBtnWJ.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
+            -- garantir estado inicial limpo antes de iniciar
+            pcall(function()
+                local char = player.Character
+                if char then
+                    local root = char:FindFirstChild("HumanoidRootPart")
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if root then
+                        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                        root.RotVelocity = Vector3.new(0, 0, 0)
+                    end
+                    if hum then
+                        hum.PlatformStand = false
+                        hum.Sit = false
+                        hum.AutoRotate = true
+                        hum:ChangeState(Enum.HumanoidStateType.Running)
+                    end
+                end
+            end)
+            -- reinicia qualquer conexão antiga e inicia
+            if velocityConn then
+                velocityConn:Disconnect()
+                velocityConn = nil
+            end
+            startVelocityMode()
+            addLog("Velocity mode ativado (WalkSpeed substituído por velocity)")
+        else
+            velocityBtnWJ.Text = "VELOCITY OFF"
+            velocityBtnWJ.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+            stopVelocityMode()
+            if not bypassActive then
+                enforceMovement()
+            end
+            addLog("Velocity mode desativado (WalkSpeed restaurado)")
         end
     end)
 
@@ -1567,16 +1810,34 @@ mainStroke.Parent = mainBtn
         end
     end
 
+    -- Substituímos o handler para reaplicar bypass no respawn
     if player.Character then
         local hum = player.Character:FindFirstChildOfClass("Humanoid")
         if not hum then
             hum = player.Character:WaitForChild("Humanoid", 2)
         end
         initializeDefaultsOnJoin()
+        -- reaplicar estado de bypass no join inicial
+        task.delay(0.06, function()
+            if bypassActive then
+                disableEnforcement()
+            else
+                enableEnforcement()
+            end
+        end)
     else
         player.CharacterAdded:Connect(function()
             task.wait(0.4)
             initializeDefaultsOnJoin()
+
+            -- reaplicar estado de bypass no novo character (persistência)
+            task.delay(0.06, function()
+                if bypassActive then
+                    disableEnforcement()
+                else
+                    enableEnforcement()
+                end
+            end)
         end)
     end
 
@@ -1618,6 +1879,33 @@ mainStroke.Parent = mainBtn
             stopHighlightEnforcerForPlayer(player)
             disableNoclip()
             revertHitboxes()
+            -- cleanup velocity mode if active
+            if velocityActive then
+                velocityActive = false
+                stopVelocityMode()
+            end
+        end
+    end)
+
+    -- Garantir reinício do velocity mode no respawn / CharacterAdded (segurança extra)
+    player.CharacterAdded:Connect(function(char)
+        task.wait(0.12)
+        if velocityActive then
+            -- limpa conexão antiga e reinicia
+            if velocityConn then
+                velocityConn:Disconnect()
+                velocityConn = nil
+            end
+            if velocityDeathConn then
+                velocityDeathConn:Disconnect()
+                velocityDeathConn = nil
+            end
+            -- aguarda root existir
+            task.delay(0.08, function()
+                if velocityActive and player.Character == char then
+                    startVelocityMode()
+                end
+            end)
         end
     end)
 end)
