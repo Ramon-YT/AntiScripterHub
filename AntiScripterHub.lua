@@ -12,7 +12,6 @@ task.spawn(function()
     local playerGui = player:WaitForChild("PlayerGui", 10)
     if not playerGui then return end
 
-    -- Dono fixo do GUI (capturado no load)
     local OWNER_USERID = player.UserId
     local PLACE_KEY = tostring(game.PlaceId)
 
@@ -20,7 +19,6 @@ task.spawn(function()
         return Players.LocalPlayer and Players.LocalPlayer.UserId == OWNER_USERID
     end
 
-    -- ===== ScreenGui único =====
     local gui = Instance.new("ScreenGui")
     gui.Name = "AntiScripterGUI_" .. tostring(OWNER_USERID)
     gui.ResetOnSpawn = false
@@ -29,7 +27,6 @@ task.spawn(function()
     gui.Parent = playerGui
     gui.DisplayOrder = 2147483647
 
-    -- Proteção: reparent automático se alguém tentar mover/destroy
     gui:GetPropertyChangedSignal("Parent"):Connect(function()
         if gui.Parent ~= playerGui then
             pcall(function() gui.Parent = playerGui end)
@@ -41,7 +38,6 @@ task.spawn(function()
         end
     end)
 
-    -- Watchdog: detecta cópias em outros PlayerGui e remove localmente
     do
         local heartbeatConn
         heartbeatConn = RunService.Heartbeat:Connect(function()
@@ -55,8 +51,47 @@ task.spawn(function()
             end
         end)
     end
+    
+    -- ══════════════════════════════════════════════════════════════════════════════
+--  DETECÇÃO DE TOQUE TRIPLO RÁPIDO (para destruir o GUI no celular)
+-- ══════════════════════════════════════════════════════════════════════════════
 
-    -- util para conectar botões de forma segura (só executa se for dono)
+local touchCount = 0
+local lastTouchTime = 0
+local TOUCH_TRIPLE_THRESHOLD = 0.45   -- tempo máximo entre toques (em segundos)
+local TOUCH_TRIPLE_RESET = 1.2        -- tempo para resetar contador se demorar
+
+UserInputService.TouchTapInWorld:Connect(function(position, processedByUI)
+    if processedByUI then return end   -- ignora toques em botões/UI
+
+    local currentTime = tick()
+
+    if currentTime - lastTouchTime > TOUCH_TRIPLE_RESET then
+        touchCount = 1
+    else
+        touchCount = touchCount + 1
+    end
+
+    lastTouchTime = currentTime
+
+    if touchCount >= 3 then
+        if onlyOwner() then
+            pcall(function()
+                gui:Destroy()
+                -- opcional: limpar variáveis se quiser
+                touchCount = 0
+            end)
+        end
+    end
+
+    -- resetar contador se demorar muito entre toques
+    task.delay(TOUCH_TRIPLE_RESET, function()
+        if tick() - lastTouchTime >= TOUCH_TRIPLE_RESET then
+            touchCount = 0
+        end
+    end)
+end)
+
     local function secureConnect(button, fn)
         button.MouseButton1Click:Connect(function(...)
             if not onlyOwner() then return end
@@ -64,7 +99,6 @@ task.spawn(function()
         end)
     end
 
-    -- ===== UI =====
     local mainBtn = Instance.new("TextButton")
     mainBtn.Size = UDim2.new(0, 50, 0, 50)
     local savedX = player:GetAttribute("BotaoPosX") or 40
@@ -138,7 +172,6 @@ task.spawn(function()
         content.CanvasSize = UDim2.new(0, 0, 0, gridLayout.AbsoluteContentSize.Y + 30)
     end)
 
-    -- Teleport frame
     local teleportFrame = Instance.new("Frame")
     teleportFrame.Size = UDim2.new(1, -20, 1, -50)
     teleportFrame.Position = UDim2.new(0, 10, 0, 40)
@@ -208,15 +241,12 @@ task.spawn(function()
     local hitboxBtn = makeBtn("HITBOX OFF")
 
     local flyBtn = makeBtn("FLY OFF")
-    flyBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-
     local teleportBtn = makeBtn("TELEPORT → PLAYER")
     teleportBtn.BackgroundColor3 = Color3.fromRGB(100, 60, 180)
 
     local walkJumpBtn = makeBtn("WALK/JUMP")
     walkJumpBtn.BackgroundColor3 = Color3.fromRGB(100, 60, 180)
 
-    -- ===== NOVO FRAME WALK/JUMP =====
     local walkJumpFrame = Instance.new("Frame")
     walkJumpFrame.Size = UDim2.new(1, -20, 1, -50)
     walkJumpFrame.Position = UDim2.new(0, 10, 0, 40)
@@ -299,7 +329,6 @@ task.spawn(function()
     applyBtn.Parent = walkJumpFrame
     Instance.new("UICorner", applyBtn).CornerRadius = UDim.new(0, 8)
 
-    -- Ajuste de layout: dois botões lado a lado (Bypass e Velocity)
     local bypassBtnWJ = Instance.new("TextButton")
     bypassBtnWJ.Size = UDim2.new(0.28, 0, 0, 35)
     bypassBtnWJ.Position = UDim2.new(0.2, 0, 0, 220)
@@ -349,7 +378,6 @@ task.spawn(function()
         content.Visible = true
     end)
 
-    -- ===== Estado =====
     local noclipActive = false
     local antiFlingActive = false
     local detectorActive = false
@@ -357,6 +385,7 @@ task.spawn(function()
     local hitboxActive = false
     local bypassActive = false
     local velocityActive = false
+    local flying = false
 
     local noclipConn = nil
     local antiFlingEnforcerConn = nil
@@ -373,6 +402,30 @@ task.spawn(function()
 
     local FLIGHT_BASE_SPEED = 80
 
+    local ownershipConn = nil
+
+    local function maintainNetworkOwnership()
+        if ownershipConn then ownershipConn:Disconnect() end
+        ownershipConn = RunService.Heartbeat:Connect(function()
+            if not onlyOwner() then return end
+            local char = player.Character
+            if not char then return end
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if root and root:IsA("BasePart") then
+                pcall(function()
+                    root:SetNetworkOwner(player)
+                end)
+            end
+        end)
+    end
+
+    local function stopNetworkOwnership()
+        if ownershipConn then
+            ownershipConn:Disconnect()
+            ownershipConn = nil
+        end
+    end
+
     local function getSavedDefaultsForPlace()
         local wsAttr = player:GetAttribute("DefaultWS_" .. PLACE_KEY)
         local jhAttr = player:GetAttribute("DefaultJH_" .. PLACE_KEY)
@@ -386,22 +439,16 @@ task.spawn(function()
     local flingOffenders = {}
     local launchedPlayers = {}
 
-    local HISTORY_SIZE = 6
-    local SPIKE_DELTA_THRESHOLD = 150
-    local SPIKE_SPEED_MIN = 60
     local WALK_SPEED_LIMIT = 200
     local JUMP_HEIGHT_LIMIT = 50
     local ANGULAR_SPEED_LIMIT = 30
     local LAUNCH_Y_THRESHOLD = -50
-    local SUSTAINED_FRAMES = 3
 
-    local function addLog(...) end
+    local suspectTimers = {}
 
-    -- ===== Enforcer WalkSpeed + JumpPower =====
     local function enforceMovementOnHumanoid(hum)
         if not hum then return end
         pcall(function()
-            -- Se velocityActive estiver ligado, não forçamos WalkSpeed no humanoid
             if not velocityActive then
                 if type(savedWalkSpeed) == "number" and savedWalkSpeed > 0 then
                     hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
@@ -440,13 +487,6 @@ task.spawn(function()
             movementEnforcerConn = nil
         end
     end
-
-    player.CharacterAdded:Connect(function()
-        task.wait(0.4)
-        if not bypassActive and onlyOwner() then
-            enforceMovement()
-        end
-    end)
 
     local humanoidWatchConnections = {}
 
@@ -692,9 +732,9 @@ task.spawn(function()
                 end
             end)
         end)
+        maintainNetworkOwnership()
     end
 
-    -- NOVA disableNoclip: sem raycast, sem teleporte para cima; apenas restaura colisões e zera velocidades
     local function disableNoclip()
         if not onlyOwner() then return end
         if noclipConn then
@@ -706,7 +746,6 @@ task.spawn(function()
             local char = player.Character
             if not char then return end
 
-            -- Restaurar colisões dos parts em múltiplas passagens
             for i = 1, 6 do
                 for _, part in ipairs(char:GetDescendants()) do
                     if part:IsA("BasePart") then
@@ -719,7 +758,6 @@ task.spawn(function()
             local root = char:FindFirstChild("HumanoidRootPart")
             local hum = char:FindFirstChildOfClass("Humanoid")
 
-            -- Zerando velocidades residuais (horizontal e angular)
             if root then
                 root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                 root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
@@ -728,7 +766,6 @@ task.spawn(function()
             end
 
             if hum then
-                -- Forçar estados que ajudam a "assentar" o personagem
                 pcall(function() hum.PlatformStand = false end)
                 hum.Sit = false
                 hum.AutoRotate = true
@@ -738,9 +775,6 @@ task.spawn(function()
                 task.wait(0.06)
                 hum:ChangeState(Enum.HumanoidStateType.Running)
             end
-
-            -- Não reposicionamos o jogador (sem nudge/teleport) para evitar revelar posição.
-            -- Apenas garantimos que colisões e velocidades foram restauradas e que o humanoid está em estado normal.
         end)
     end
 
@@ -776,7 +810,12 @@ task.spawn(function()
 
                 local myChar = player.Character
                 if myChar and myChar:FindFirstChild("HumanoidRootPart") then
-                    myChar.HumanoidRootPart.CFrame = targetChar.HumanoidRootPart.CFrame * CFrame.new(0, 3, 0)
+                    local root = myChar.HumanoidRootPart
+                    local targetCF = targetChar.HumanoidRootPart.CFrame * CFrame.new(0, 3, 0)
+                    for i = 1, 5 do
+                        root.CFrame = targetCF
+                    end
+                    pcall(function() root:SetNetworkOwner(player) end)
                 end
 
                 teleportFrame.Visible = false
@@ -785,7 +824,6 @@ task.spawn(function()
         end
     end
 
-    -- ===== Highlight, Detector, Suspect (mantidos iguais) =====
     local highlightConnections = {}
     local highlightEnforcerConnections = {}
 
@@ -997,7 +1035,6 @@ task.spawn(function()
         table.insert(launchedPlayers, plr)
     end
 
-    local suspectTimers = {}
     local function markSuspect(plr, reason)
         pcall(function()
             if not plr or plr == player then return end
@@ -1029,7 +1066,7 @@ task.spawn(function()
             if reason:lower():find("fling") or reason:lower():find("spin") then
                 addFlingOffender(plr)
             end
-            if reason:lower():find("lanço") or reason:lower():find("teleport") or reason:lower():find("posição") then
+            if reason:lower():find("lanço") or reason:lower():find("teleport") or reason:lower():find("teleporte") or reason:lower():find("posição") then
                 addLaunchedPlayer(plr)
             end
 
@@ -1037,79 +1074,204 @@ task.spawn(function()
         end)
     end
 
-    local speedHist = {}
-    local sustainedCount = {}
+    -- ══════════════════════════════════════════════════════════════════════════════
+    --  DETECTOR AVANÇADO 2026 (substituído aqui)
+    -- ══════════════════════════════════════════════════════════════════════════════
+
+    local DETECTION_THRESHOLD = 24
+    local DECAY_PER_SECOND    = 4.5
+    local CONFIRMATION_FRAMES = 5
+
+    local playerData = {}
+
+    local function resetData(plr)
+        playerData[plr] = {
+            score          = 0,
+            lastPos        = nil,
+            lastVel        = Vector3.zero,
+            lastAng        = Vector3.zero,
+            lastHealth     = nil,
+            airTime        = 0,
+            horizShort     = {},
+            horizMedium    = {},
+            angHistory     = {},
+            tpStreak       = 0,
+            speedStreak    = 0,
+            flyStreak      = 0,
+            godStreak      = 0,
+            aimSnapStreak  = 0,
+            lastToolAttack = nil,
+            lastUpdate     = tick()
+        }
+    end
+
     RunService.Heartbeat:Connect(function(dt)
         if not detectorActive then return end
 
-        for _, plr in ipairs(Players:GetPlayers()) do
+        local now = tick()
+
+        for _, plr in Players:GetPlayers() do
             if plr == player then continue end
+
             local char = plr.Character
-            if not char then continue end
+            if not char then
+                playerData[plr] = nil
+                continue
+            end
 
             local root = char:FindFirstChild("HumanoidRootPart")
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if not root or not hum then continue end
+            local hum  = char:FindFirstChildOfClass("Humanoid")
+            if not root or not hum or hum.Health <= 0 then continue end
 
-            local vel = root.AssemblyLinearVelocity or Vector3.new(0,0,0)
-            local angVel = root.AssemblyAngularVelocity or Vector3.new(0,0,0)
-            local speed = vel.Magnitude
-            local angSpeed = angVel.Magnitude
+            local data = playerData[plr] or (resetData(plr) and playerData[plr])
 
-            speedHist[plr] = speedHist[plr] or {}
-            table.insert(speedHist[plr], 1, speed)
-            while #speedHist[plr] > HISTORY_SIZE do table.remove(speedHist[plr]) end
+            local deltaT = now - data.lastUpdate
+            data.lastUpdate = now
 
-            local prev = speedHist[plr][2] or 0
-            local delta = speed - prev
+            data.score = math.max(0, data.score - DECAY_PER_SECOND * deltaT)
 
-            sustainedCount[plr] = sustainedCount[plr] or 0
+            local violated = false
+            local reasons = {}
 
-            local isSpike = (speed > SPIKE_SPEED_MIN and delta > SPIKE_DELTA_THRESHOLD)
-            if isSpike then
-                sustainedCount[plr] = sustainedCount[plr] + 1
-            elseif speed > SPIKE_SPEED_MIN then
-                sustainedCount[plr] = sustainedCount[plr] + 1
+            -- Ignorar estados que invalidam checagem
+            if hum:GetState() == Enum.HumanoidStateType.Dead
+            or hum:GetState() == Enum.HumanoidStateType.Ragdoll
+            or hum.PlatformStand
+            or hum.Sit then
+                data.airTime = 0
+                data.score = math.max(0, data.score - 12 * deltaT)
+                continue
+            end
+
+            -- Tempo no ar
+            if hum:GetState() == Enum.HumanoidStateType.Freefall
+            or hum:GetState() == Enum.HumanoidStateType.Jumping then
+                data.airTime += deltaT
             else
-                sustainedCount[plr] = 0
+                data.airTime = 0
             end
 
-            local reason = nil
-            if hum.WalkSpeed and hum.WalkSpeed > WALK_SPEED_LIMIT then
-                reason = "WalkSpeed alto"
-            end
-            if (hum.JumpHeight and hum.JumpHeight > JUMP_HEIGHT_LIMIT) or (hum.JumpPower and hum.JumpPower > 100) then
-                reason = reason or "Jump alterado"
-            end
-            if (isSpike and speed > SPIKE_SPEED_MIN) or (sustainedCount[plr] >= SUSTAINED_FRAMES and speed > SPIKE_SPEED_MIN) then
-                reason = reason or "Fling detectado (velocity)"
-            end
-            if angSpeed > ANGULAR_SPEED_LIMIT then
-                reason = reason or "Spin/Fling detectado (angular)"
-            end
-            if vel.Y and vel.Y < LAUNCH_Y_THRESHOLD then
-                reason = reason or "Lanço vertical extremo"
+            local pos = root.Position
+            local vel = root.AssemblyLinearVelocity
+            local ang = root.AssemblyAngularVelocity
+
+            -- 1. Teleporte extremo / repetido
+            if data.lastPos then
+                local dPos = (pos - data.lastPos).Magnitude
+                if dPos > 85 and deltaT < 0.2 then
+                    data.tpStreak = data.tpStreak + 1
+                    if data.tpStreak >= 2 then
+                        table.insert(reasons, "Teleporte repetido")
+                        data.score += 20
+                        violated = true
+                    end
+                else
+                    data.tpStreak = 0
+                end
             end
 
-            if reason then
-                markSuspect(plr, reason)
+            -- 2. Velocidade horizontal (spike + sustentada)
+            local hSpeed = Vector3.new(vel.X,0,vel.Z).Magnitude
+            local expMax = (hum.WalkSpeed or 16) * 1.45 + 25
+
+            table.insert(data.horizShort, hSpeed)
+            if #data.horizShort > 18 then table.remove(data.horizShort,1) end
+
+            table.insert(data.horizMedium, hSpeed)
+            if #data.horizMedium > 150 then table.remove(data.horizMedium,1) end
+
+            local avgShort   = 0; for _,v in data.horizShort   do avgShort   += v end; avgShort   /= math.max(1,#data.horizShort)
+            local avgMedium  = 0; for _,v in data.horizMedium  do avgMedium  += v end; avgMedium  /= math.max(1,#data.horizMedium)
+
+            if avgShort > expMax * 1.7 then
+                data.speedStreak += 1
+                if data.speedStreak >= 5 then
+                    table.insert(reasons, "Velocidade horizontal alta sustentada")
+                    data.score += 12
+                    violated = true
+                end
+            else
+                data.speedStreak = 0
             end
+
+            -- 3. Fly / levitação prolongada
+            local vAbs = math.abs(vel.Y)
+            if data.airTime > 3.8 then
+                if vAbs < 14 then
+                    data.flyStreak += 1
+                    if data.flyStreak >= 7 then
+                        table.insert(reasons, "Fly / levitação prolongada")
+                        data.score += 15
+                        violated = true
+                    end
+                elseif vel.Y > 48 and data.airTime < 1.6 then
+                    table.insert(reasons, "Subida vertical anormal")
+                    data.score += 13
+                    violated = true
+                end
+            end
+
+            -- 4. Spin angular
+            local angMag = ang.Magnitude
+            table.insert(data.angHistory, angMag)
+            if #data.angHistory > 15 then table.remove(data.angHistory,1) end
+
+            local avgAng = 0; for _,v in data.angHistory do avgAng += v end; avgAng /= math.max(1,#data.angHistory)
+
+            if avgAng > 105 or angMag > 160 then
+                table.insert(reasons, "Rotação angular extrema")
+                data.score += 17
+                violated = true
+            end
+
+            -- 5. Godmode / cura instantânea suspeita
+            if data.lastHealth then
+                if hum.Health > data.lastHealth + 8 then
+                    data.godStreak += 1
+                    if data.godStreak >= 3 then
+                        table.insert(reasons, "Regeneração / godmode suspeito")
+                        data.score += 16
+                        violated = true
+                    end
+                end
+            end
+            data.lastHealth = hum.Health
+
+            -- 6. Aim snap / rotação angular rápida em movimento
+            if data.lastAng then
+                local dAng = (ang - data.lastAng).Magnitude
+                if dAng > 200 and hSpeed > 22 then
+                    data.aimSnapStreak += 1
+                    if data.aimSnapStreak >= 5 then
+                        table.insert(reasons, "Aim snap / rotação suspeita")
+                        data.score += 11
+                        violated = true
+                    end
+                else
+                    data.aimSnapStreak = 0
+                end
+            end
+            data.lastAng = ang
+
+            -- Decisão final
+            if violated and data.score >= DETECTION_THRESHOLD then
+                local msg = table.concat(reasons, " + ") .. "  (score: " .. math.floor(data.score) .. ")"
+                markSuspect(plr, msg)
+                data.score = math.max(0, data.score - 16) -- evita spam
+            end
+
+            data.lastPos = pos
+            data.lastVel = vel
         end
 
-        local now = tick()
-        for plr, expire in pairs(suspectTimers) do
-            if now > expire then
-                if plr.Character and plr.Character:FindFirstChild("Head") then
-                    local head = plr.Character.Head
-                    local tag = head:FindFirstChild("SuspectTag")
-                    if tag then tag:Destroy() end
-                end
-                suspectTimers[plr] = nil
+        -- Limpeza
+        for plr in pairs(playerData) do
+            if not table.find(Players:GetPlayers(), plr) then
+                playerData[plr] = nil
             end
         end
     end)
 
-    -- ===== FLY CORRIGIDO: velocidade vertical AGORA USA A MESMA VELOCIDADE TOTAL =====
     local cam = workspace.CurrentCamera
 
     local SPRINT_MULT = 1.6
@@ -1117,7 +1279,6 @@ task.spawn(function()
     local MAX_FORCE = 1e5
     local TOUCH_DESCEND_SIDE = 0.5
 
-    local flying = false
     local rootPart, humanoid
     local bv, bg
     local currentVelocity = Vector3.new()
@@ -1156,7 +1317,7 @@ task.spawn(function()
         cam = workspace.CurrentCamera or cam
         flyBtn.Text = "FLY ON"
         flyBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
-        addLog("Fly ativado")
+        maintainNetworkOwnership()
     end
 
     local function stopFly()
@@ -1171,7 +1332,6 @@ task.spawn(function()
 
         flyBtn.Text = "FLY OFF"
         flyBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-        addLog("Fly desativado")
     end
 
     UserInputService.InputChanged:Connect(function(input, gameProcessed)
@@ -1290,7 +1450,6 @@ task.spawn(function()
         return inputX, inputZ
     end
 
-    -- ===== LOOP FLY CORRIGIDO =====
     RunService.RenderStepped:Connect(function(dt)
         if flying and rootPart and bv and bg and cam and onlyOwner() then
             local ix, iz = getInputAxes()
@@ -1313,7 +1472,6 @@ task.spawn(function()
             local speed = FLIGHT_BASE_SPEED * (sprinting and SPRINT_MULT or 1)
             local horiz = Vector3.new(worldDir.X, 0, worldDir.Z) * speed
 
-            -- VELOCIDADE VERTICAL AGORA USA A MESMA VELOCIDADE TOTAL (sem clamp de 60)
             local vy = 0
             if verticalTarget > 0 then
                 vy = speed
@@ -1348,16 +1506,13 @@ task.spawn(function()
     player.CharacterAdded:Connect(function(char)
         wait(0.35)
         stopFly()
-        -- garantir que velocity mode seja reiniciado/desligado ao respawn
         if velocityActive then
-            -- reinicia conexão para novo root/humanoid de forma robusta
             if velocityConn then
                 velocityConn:Disconnect(); velocityConn = nil
             end
             if velocityDeathConn then
                 velocityDeathConn:Disconnect(); velocityDeathConn = nil
             end
-            -- aguarda humanoid/root existirem e reinicia o modo
             task.delay(0.08, function()
                 if not velocityActive then return end
                 local charNow = player.Character
@@ -1372,7 +1527,6 @@ task.spawn(function()
                     tries = tries + 1
                 end
                 if root and hum and velocityActive then
-                    -- garantir estado inicial limpo
                     pcall(function()
                         root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                         root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
@@ -1382,7 +1536,6 @@ task.spawn(function()
                         hum.AutoRotate = true
                         hum:ChangeState(Enum.HumanoidStateType.Running)
                     end)
-                    -- reinicia o modo (stop/start para garantir limpeza)
                     if velocityConn then
                         velocityConn:Disconnect()
                         velocityConn = nil
@@ -1404,7 +1557,108 @@ task.spawn(function()
         end
     end)
 
-    -- ===== UI Interactions =====
+    local function clearVelocityDeathWatcher()
+        if velocityDeathConn then
+            velocityDeathConn:Disconnect()
+            velocityDeathConn = nil
+        end
+    end
+
+    local function attachHumanoidDeathWatcher()
+        clearVelocityDeathWatcher()
+        local char = player.Character
+        if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        velocityDeathConn = hum.Died:Connect(function()
+            if velocityConn then
+                velocityConn:Disconnect()
+                velocityConn = nil
+            end
+            pcall(function()
+                stopVelocityMode()
+            end)
+            velocityActive = false
+            if velocityBtnWJ and velocityBtnWJ:IsA("TextButton") then
+                velocityBtnWJ.Text = "VELOCITY OFF"
+                velocityBtnWJ.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+            end
+        end)
+    end
+
+    local function startVelocityMode()
+        if velocityConn then return end
+
+        velocityConn = RunService.Heartbeat:Connect(function(dt)
+            if not velocityActive or not onlyOwner() then return end
+
+            local char = player.Character
+            if not char then return end
+
+            local root = char:FindFirstChild("HumanoidRootPart")
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not root or not hum then return end
+
+            local currentY = 0
+            local ok, av = pcall(function() return root.AssemblyLinearVelocity end)
+            if ok and av then currentY = av.Y end
+
+            local md = hum.MoveDirection or Vector3.new(0,0,0)
+            local horiz = Vector3.new(md.X, 0, md.Z)
+            if horiz.Magnitude > 0 then horiz = horiz.Unit else horiz = Vector3.new(0,0,0) end
+
+            local speed = math.clamp(tonumber(savedWalkSpeed) or 0, 0, WALK_SPEED_LIMIT)
+
+            local desiredVel = Vector3.new(horiz.X * speed, currentY, horiz.Z * speed)
+
+            pcall(function()
+                root.AssemblyLinearVelocity = desiredVel
+                root.AssemblyAngularVelocity = Vector3.new(0,0,0)
+                root.RotVelocity = Vector3.new(0,0,0)
+            end)
+
+            pcall(function()
+                if hum and hum.Parent then
+                    hum.WalkSpeed = 0.01
+                    hum.PlatformStand = false
+                    hum.AutoRotate = true
+                end
+            end)
+        end)
+
+        attachHumanoidDeathWatcher()
+    end
+
+    local function stopVelocityMode()
+        if velocityConn then
+            velocityConn:Disconnect()
+            velocityConn = nil
+        end
+        clearVelocityDeathWatcher()
+        pcall(function()
+            local char = player.Character
+            if char then
+                local root = char:FindFirstChild("HumanoidRootPart")
+                if root then
+                    local y = 0
+                    local ok, av = pcall(function() return root.AssemblyLinearVelocity end)
+                    if ok and av then y = av.Y end
+                    root.AssemblyLinearVelocity = Vector3.new(0, y, 0)
+                    root.AssemblyAngularVelocity = Vector3.new(0,0,0)
+                    root.RotVelocity = Vector3.new(0,0,0)
+                end
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
+                    hum.PlatformStand = false
+                    hum.Sit = false
+                    hum.AutoRotate = true
+                    hum:ChangeState(Enum.HumanoidStateType.Running)
+                end
+            end
+        end)
+    end
+
     local dragging = false
     local dragStart = Vector2.new()
     local startPos = UDim2.new()
@@ -1462,12 +1716,10 @@ task.spawn(function()
             enableNoclip()
             noclipBtn.Text = "NOCLIP ON"
             noclipBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
-            addLog("Noclip ativado")
         else
             disableNoclip()
             noclipBtn.Text = "NOCLIP OFF"
             noclipBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-            addLog("Noclip desativado")
         end
     end)
 
@@ -1478,13 +1730,11 @@ task.spawn(function()
             startAntiFlingEnforcer()
             antiFlingBtn.Text = "ANTI-FLING ON"
             antiFlingBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
-            addLog("Anti-fling ativado")
         else
             stopAntiFlingEnforcer()
             antiFlingBtn.Text = "ANTI-FLING OFF"
             antiFlingBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
             updateAntiFling()
-            addLog("Anti-fling desativado")
         end
     end)
 
@@ -1493,7 +1743,6 @@ task.spawn(function()
         detectorActive = not detectorActive
         detectorBtn.Text = "DETECTOR " .. (detectorActive and "ON" or "OFF")
         detectorBtn.BackgroundColor3 = detectorActive and Color3.fromRGB(0, 180, 0) or Color3.fromRGB(45, 45, 45)
-        addLog("Detector " .. (detectorActive and "ativado" or "desativado"))
         if not detectorActive then
             for plr, _ in pairs(suspectTimers) do
                 if plr and plr.Character then
@@ -1505,8 +1754,7 @@ task.spawn(function()
                 end
             end
             suspectTimers = {}
-            speedHist = {}
-            sustainedCount = {}
+            playerData = {}
         end
     end)
 
@@ -1516,12 +1764,10 @@ task.spawn(function()
         if highlightActive then
             highlightBtn.Text = "HIGHLIGHT ON"
             highlightBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
-            addLog("Highlight ativado")
             enableHighlightsForAll()
         else
             highlightBtn.Text = "HIGHLIGHT OFF"
             highlightBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-            addLog("Highlight desativado")
             disableHighlightsForAll()
         end
     end)
@@ -1532,12 +1778,10 @@ task.spawn(function()
         if hitboxActive then
             hitboxBtn.Text = "HITBOX REMOVED"
             hitboxBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
-            addLog("Hitbox removida (Head minimizado)")
             removeHitboxes()
         else
             hitboxBtn.Text = "HITBOX OFF"
             hitboxBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-            addLog("Hitbox restaurada")
             revertHitboxes()
         end
     end)
@@ -1551,7 +1795,6 @@ task.spawn(function()
         end
     end)
 
-    -- ===== Botões do novo frame WALK/JUMP =====
     applyBtn.MouseButton1Click:Connect(function()
         if not onlyOwner() then return end
         local valWS = tonumber(wsBox.Text) or savedWalkSpeed
@@ -1569,9 +1812,7 @@ task.spawn(function()
             enforceMovement()
         end
 
-        -- Se velocity mode estiver ativo, reinicia a rotina para garantir que o novo savedWalkSpeed seja usado
         if velocityActive then
-            -- stop/start rápido para garantir leitura imediata do novo valor
             if velocityConn then
                 velocityConn:Disconnect()
                 velocityConn = nil
@@ -1580,126 +1821,7 @@ task.spawn(function()
                 if velocityActive then startVelocityMode() end
             end)
         end
-
-        addLog("WalkSpeed e JumpHeight aplicados: " .. tostring(savedWalkSpeed) .. " / " .. tostring(savedJumpHeight))
     end)
-
-    -- ===== Velocity mode functions (melhoradas) =====
-    local function clearVelocityDeathWatcher()
-        if velocityDeathConn then
-            velocityDeathConn:Disconnect()
-            velocityDeathConn = nil
-        end
-    end
-
-    local function attachHumanoidDeathWatcher()
-        clearVelocityDeathWatcher()
-        local char = player.Character
-        if not char then return end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum then return end
-        velocityDeathConn = hum.Died:Connect(function()
-            -- Ao morrer, DESATIVAR velocity automaticamente (usuário pediu)
-            -- Isso evita que o personagem "trave" após respawn; o usuário terá que reativar manualmente.
-            if velocityConn then
-                velocityConn:Disconnect()
-                velocityConn = nil
-            end
-            -- garantir que o modo seja parado e o humanoid restaurado
-            pcall(function()
-                stopVelocityMode()
-            end)
-            -- marcar como desativado e atualizar UI
-            velocityActive = false
-            if velocityBtnWJ and velocityBtnWJ:IsA("TextButton") then
-                velocityBtnWJ.Text = "VELOCITY OFF"
-                velocityBtnWJ.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-            end
-            addLog("Velocity mode desativado automaticamente após morte (reative manualmente)")
-        end)
-    end
-
-    -- startVelocityMode agora usa Heartbeat e tenta ser resiliente a mudanças de character/root
-    local function startVelocityMode()
-        if velocityConn then return end
-
-        velocityConn = RunService.Heartbeat:Connect(function(dt)
-            if not velocityActive or not onlyOwner() then return end
-
-            local char = player.Character
-            if not char then return end
-
-            local root = char:FindFirstChild("HumanoidRootPart")
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if not root or not hum then return end
-
-            -- preserva componente Y atual (gravidade/queda)
-            local currentY = 0
-            local ok, av = pcall(function() return root.AssemblyLinearVelocity end)
-            if ok and av then currentY = av.Y end
-
-            -- MoveDirection é um vetor unitário local baseado na entrada do jogador
-            local md = hum.MoveDirection or Vector3.new(0,0,0)
-            local horiz = Vector3.new(md.X, 0, md.Z)
-            if horiz.Magnitude > 0 then horiz = horiz.Unit else horiz = Vector3.new(0,0,0) end
-
-            -- ler savedWalkSpeed dinamicamente a cada frame (mudanças na UI entram em efeito imediatamente)
-            local speed = math.clamp(tonumber(savedWalkSpeed) or 0, 0, WALK_SPEED_LIMIT)
-
-            -- aplicar velocidade horizontal baseada no savedWalkSpeed
-            local desiredVel = Vector3.new(horiz.X * speed, currentY, horiz.Z * speed)
-
-            -- aplicar diretamente na AssemblyLinearVelocity para "velocity mode"
-            pcall(function()
-                root.AssemblyLinearVelocity = desiredVel
-                -- garantir que não haja rotação residual
-                root.AssemblyAngularVelocity = Vector3.new(0,0,0)
-                root.RotVelocity = Vector3.new(0,0,0)
-            end)
-
-            -- reduzir conflito com Humanoid.WalkSpeed forçando um valor baixo
-            pcall(function()
-                if hum and hum.Parent then
-                    hum.WalkSpeed = 0.01
-                    hum.PlatformStand = false
-                    hum.AutoRotate = true
-                end
-            end)
-        end)
-
-        attachHumanoidDeathWatcher()
-    end
-
-    local function stopVelocityMode()
-        if velocityConn then
-            velocityConn:Disconnect()
-            velocityConn = nil
-        end
-        clearVelocityDeathWatcher()
-        -- Ao desligar, zerar componente horizontal e restaurar WalkSpeed via enforcement
-        pcall(function()
-            local char = player.Character
-            if char then
-                local root = char:FindFirstChild("HumanoidRootPart")
-                if root then
-                    local y = 0
-                    local ok, av = pcall(function() return root.AssemblyLinearVelocity end)
-                    if ok and av then y = av.Y end
-                    root.AssemblyLinearVelocity = Vector3.new(0, y, 0)
-                    root.AssemblyAngularVelocity = Vector3.new(0,0,0)
-                    root.RotVelocity = Vector3.new(0,0,0)
-                end
-                local hum = char:FindFirstChildOfClass("Humanoid")
-                if hum then
-                    hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
-                    hum.PlatformStand = false
-                    hum.Sit = false
-                    hum.AutoRotate = true
-                    hum:ChangeState(Enum.HumanoidStateType.Running)
-                end
-            end
-        end)
-    end
 
     bypassBtnWJ.MouseButton1Click:Connect(function()
         if not onlyOwner() then return end
@@ -1708,12 +1830,10 @@ task.spawn(function()
             bypassBtnWJ.Text = "BYPASS OFF"
             bypassBtnWJ.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
             disableEnforcement()
-            addLog("Bypass Walk/Jump ativado (enforcement desligado)")
         else
             bypassBtnWJ.Text = "BYPASS ON"
             bypassBtnWJ.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
             enableEnforcement()
-            addLog("Bypass Walk/Jump desativado (enforcement ligado)")
         end
     end)
 
@@ -1723,7 +1843,6 @@ task.spawn(function()
         if velocityActive then
             velocityBtnWJ.Text = "VELOCITY ON"
             velocityBtnWJ.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
-            -- garantir estado inicial limpo antes de iniciar
             pcall(function()
                 local char = player.Character
                 if char then
@@ -1742,13 +1861,11 @@ task.spawn(function()
                     end
                 end
             end)
-            -- reinicia qualquer conexão antiga e inicia
             if velocityConn then
                 velocityConn:Disconnect()
                 velocityConn = nil
             end
             startVelocityMode()
-            addLog("Velocity mode ativado (WalkSpeed substituído por velocity)")
         else
             velocityBtnWJ.Text = "VELOCITY OFF"
             velocityBtnWJ.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
@@ -1756,7 +1873,6 @@ task.spawn(function()
             if not bypassActive then
                 enforceMovement()
             end
-            addLog("Velocity mode desativado (WalkSpeed restaurado)")
         end
     end)
 
@@ -1776,13 +1892,9 @@ task.spawn(function()
             if not bypassActive then
                 enforceMovement()
             end
-            addLog("Walk/Jump resetados para os defaults deste jogo: " .. tostring(savedWalkSpeed) .. " / " .. tostring(savedJumpHeight))
-        else
-            addLog("Não foi possível detectar defaults do jogo; mantendo valores atuais")
         end
     end)
 
-    -- ===== Inicialização =====
     local function initializeDefaultsOnJoin()
         local defaultWS, defaultJH = getSavedDefaultsForPlace()
         if not (defaultWS and defaultJH) then
@@ -1810,14 +1922,12 @@ task.spawn(function()
         end
     end
 
-    -- Substituímos o handler para reaplicar bypass no respawn
     if player.Character then
         local hum = player.Character:FindFirstChildOfClass("Humanoid")
         if not hum then
             hum = player.Character:WaitForChild("Humanoid", 2)
         end
         initializeDefaultsOnJoin()
-        -- reaplicar estado de bypass no join inicial
         task.delay(0.06, function()
             if bypassActive then
                 disableEnforcement()
@@ -1830,7 +1940,6 @@ task.spawn(function()
             task.wait(0.4)
             initializeDefaultsOnJoin()
 
-            -- reaplicar estado de bypass no novo character (persistência)
             task.delay(0.06, function()
                 if bypassActive then
                     disableEnforcement()
@@ -1856,9 +1965,8 @@ task.spawn(function()
         disconnectHighlightForPlayer(plr)
         flingOffenders[plr] = nil
         launchedPlayers[plr] = nil
-        speedHist[plr] = nil
-        sustainedCount[plr] = nil
         suspectTimers[plr] = nil
+        playerData[plr] = nil
         stopHighlightEnforcerForPlayer(plr)
     end)
 
@@ -1879,19 +1987,17 @@ task.spawn(function()
             stopHighlightEnforcerForPlayer(player)
             disableNoclip()
             revertHitboxes()
-            -- cleanup velocity mode if active
             if velocityActive then
                 velocityActive = false
                 stopVelocityMode()
             end
+            stopNetworkOwnership()
         end
     end)
 
-    -- Garantir reinício do velocity mode no respawn / CharacterAdded (segurança extra)
     player.CharacterAdded:Connect(function(char)
         task.wait(0.12)
         if velocityActive then
-            -- limpa conexão antiga e reinicia
             if velocityConn then
                 velocityConn:Disconnect()
                 velocityConn = nil
@@ -1900,12 +2006,14 @@ task.spawn(function()
                 velocityDeathConn:Disconnect()
                 velocityDeathConn = nil
             end
-            -- aguarda root existir
             task.delay(0.08, function()
                 if velocityActive and player.Character == char then
                     startVelocityMode()
                 end
             end)
         end
+        maintainNetworkOwnership()
     end)
+
+    maintainNetworkOwnership()
 end)
