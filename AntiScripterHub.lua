@@ -28,7 +28,7 @@ task.spawn(function()
     gui.DisplayOrder = 2147483647
 
     gui:GetPropertyChangedSignal("Parent"):Connect(function()
-        if gui.Parent ~= playerGui then
+        if gui.Parent \~= playerGui then
             pcall(function() gui.Parent = playerGui end)
         end
     end)
@@ -42,7 +42,7 @@ task.spawn(function()
         local heartbeatConn
         heartbeatConn = RunService.Heartbeat:Connect(function()
             for _, plr in ipairs(Players:GetPlayers()) do
-                if plr ~= player and plr:FindFirstChild("PlayerGui") then
+                if plr \~= player and plr:FindFirstChild("PlayerGui") then
                     local otherGui = plr.PlayerGui:FindFirstChild(gui.Name)
                     if otherGui then
                         pcall(function() otherGui:Destroy() end)
@@ -58,11 +58,11 @@ task.spawn(function()
 
 local touchCount = 0
 local lastTouchTime = 0
-local TOUCH_TRIPLE_THRESHOLD = 0.45   -- tempo máximo entre toques (em segundos)
-local TOUCH_TRIPLE_RESET = 1.2        -- tempo para resetar contador se demorar
+local TOUCH_TRIPLE_THRESHOLD = 0.45
+local TOUCH_TRIPLE_RESET = 1.2
 
 UserInputService.TouchTapInWorld:Connect(function(position, processedByUI)
-    if processedByUI then return end   -- ignora toques em botões/UI
+    if processedByUI then return end
 
     local currentTime = tick()
 
@@ -78,13 +78,11 @@ UserInputService.TouchTapInWorld:Connect(function(position, processedByUI)
         if onlyOwner() then
             pcall(function()
                 gui:Destroy()
-                -- opcional: limpar variáveis se quiser
                 touchCount = 0
             end)
         end
     end
 
-    -- resetar contador se demorar muito entre toques
     task.delay(TOUCH_TRIPLE_RESET, function()
         if tick() - lastTouchTime >= TOUCH_TRIPLE_RESET then
             touchCount = 0
@@ -238,7 +236,7 @@ end)
     local antiFlingBtn = makeBtn("ANTI-FLING OFF")
     local detectorBtn = makeBtn("DETECTOR OFF")
     local highlightBtn = makeBtn("HIGHLIGHT OFF")
-    local hitboxBtn = makeBtn("HITBOX OFF")
+    local camBypassBtn = makeBtn("CAM BYPASS OFF")
 
     local flyBtn = makeBtn("FLY OFF")
     local teleportBtn = makeBtn("TELEPORT → PLAYER")
@@ -332,8 +330,8 @@ end)
     local bypassBtnWJ = Instance.new("TextButton")
     bypassBtnWJ.Size = UDim2.new(0.28, 0, 0, 35)
     bypassBtnWJ.Position = UDim2.new(0.2, 0, 0, 220)
-    bypassBtnWJ.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
-    bypassBtnWJ.Text = "BYPASS ON"
+    bypassBtnWJ.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    bypassBtnWJ.Text = "BYPASS OFF"
     bypassBtnWJ.TextColor3 = Color3.new(1,1,1)
     bypassBtnWJ.TextSize = 15
     bypassBtnWJ.Font = Enum.Font.GothamBold
@@ -382,20 +380,18 @@ end)
     local antiFlingActive = false
     local detectorActive = false
     local highlightActive = false
-    local hitboxActive = false
-    local bypassActive = false
+    local camBypassActive = false
+    local bypassActive = true   -- true = OFF (jogo controla normalmente)
     local velocityActive = false
     local flying = false
 
     local noclipConn = nil
     local antiFlingEnforcerConn = nil
     local movementEnforcerConn = nil
-    local hitboxOriginals = {}
-    local hitboxOriginalTransparency = {}
-    local hitboxOriginalCanCollide = {}
-
     local velocityConn = nil
     local velocityDeathConn = nil
+    local camBypassConn = nil
+    local antiRubberConn = nil   -- NOVO: anti-rubberband global
 
     local savedWalkSpeed = 16
     local savedJumpHeight = 7.2
@@ -403,6 +399,9 @@ end)
     local FLIGHT_BASE_SPEED = 80
 
     local ownershipConn = nil
+
+    local originalCameraMaxZoom = player.CameraMaxZoomDistance or 128
+    local originalCameraMinZoom = player.CameraMinZoomDistance or 0.5
 
     local function maintainNetworkOwnership()
         if ownershipConn then ownershipConn:Disconnect() end
@@ -445,6 +444,28 @@ end)
     local LAUNCH_Y_THRESHOLD = -50
 
     local suspectTimers = {}
+
+    local SUSPICIOUS_GUI_KEYWORDS = {
+        "fluxus", "delta", "synapse", "krnl", "solara", "wave", "celery", "vega", "executor", 
+        "infyield", "iy", "dex", "darkdex", "synx", "scripthub", "console", "menu", "hub"
+    }
+
+    local function detectSuspiciousGUI(plr)
+        if not plr or not plr:FindFirstChild("PlayerGui") then return nil end
+        local playerGui = plr.PlayerGui
+        for _, obj in ipairs(playerGui:GetDescendants()) do
+            if obj:IsA("GuiObject") then
+                local nameLower = obj.Name:lower()
+                if nameLower:find("antiscripter") or nameLower:find("anti scripter") then continue end
+                for _, keyword in ipairs(SUSPICIOUS_GUI_KEYWORDS) do
+                    if nameLower:find(keyword) then
+                        return obj.Name
+                    end
+                end
+            end
+        end
+        return nil
+    end
 
     local function enforceMovementOnHumanoid(hum)
         if not hum then return end
@@ -572,7 +593,6 @@ end)
     end
 
     local function enableEnforcement()
-        bypassActive = false
         if onlyOwner() then
             startMovementEnforcer()
             if player.Character then
@@ -585,16 +605,13 @@ end)
     end
 
     local function disableEnforcement()
-        bypassActive = true
         stopMovementEnforcer()
         disconnectAllHumanoidWatchers()
     end
 
-    enableEnforcement()
-
     local function computeJumpHeightFromPower(jumpPower)
         local gravity = Workspace.Gravity or 196.2
-        if type(jumpPower) ~= "number" or jumpPower <= 0 then return nil end
+        if type(jumpPower) \~= "number" or jumpPower <= 0 then return nil end
         return (jumpPower * jumpPower) / (2 * gravity)
     end
 
@@ -623,44 +640,6 @@ end)
 
         setSavedDefaultsForPlace(savedWalkSpeed, savedJumpHeight)
         return savedWalkSpeed, savedJumpHeight
-    end
-
-    local function removeHitboxes()
-        if not onlyOwner() then return end
-        for _, plr in ipairs(Players:GetPlayers()) do
-            if plr.Character then
-                for _, part in ipairs(plr.Character:GetDescendants()) do
-                    if part:IsA("BasePart") and part.Name == "Head" then
-                        if not hitboxOriginals[part] then
-                            hitboxOriginals[part] = part.Size
-                            hitboxOriginalTransparency[part] = part.Transparency
-                            hitboxOriginalCanCollide[part] = part.CanCollide
-                        end
-                        part.Size = Vector3.new(0.01, 0.01, 0.01)
-                        part.Transparency = 1
-                        part.CanCollide = false
-                    end
-                end
-            end
-        end
-    end
-
-    local function revertHitboxes()
-        if not onlyOwner() then return end
-        for part, original in pairs(hitboxOriginals) do
-            if part and part.Parent then
-                part.Size = original
-                if hitboxOriginalTransparency[part] ~= nil then
-                    part.Transparency = hitboxOriginalTransparency[part]
-                end
-                if hitboxOriginalCanCollide[part] ~= nil then
-                    part.CanCollide = hitboxOriginalCanCollide[part]
-                end
-            end
-        end
-        hitboxOriginals = {}
-        hitboxOriginalTransparency = {}
-        hitboxOriginalCanCollide = {}
     end
 
     local function updateAntiFling()
@@ -812,10 +791,16 @@ end)
                 if myChar and myChar:FindFirstChild("HumanoidRootPart") then
                     local root = myChar.HumanoidRootPart
                     local targetCF = targetChar.HumanoidRootPart.CFrame * CFrame.new(0, 3, 0)
-                    for i = 1, 5 do
+
+                    -- TELEPORTE INCREMENTAL (anti-rubberband)
+                    task.spawn(function()
+                        for i = 1, 20 do
+                            root.CFrame = root.CFrame:Lerp(targetCF, i / 20)
+                            task.wait()
+                        end
                         root.CFrame = targetCF
-                    end
-                    pcall(function() root:SetNetworkOwner(player) end)
+                        pcall(function() root:SetNetworkOwner(player) end)
+                    end)
                 end
 
                 teleportFrame.Visible = false
@@ -898,7 +883,7 @@ end)
 
     local function neutralizeOtherHighlights(char)
         for _, obj in ipairs(char:GetChildren()) do
-            if obj:IsA("Highlight") and obj.Name ~= "AntiScripterHighlight" then
+            if obj:IsA("Highlight") and obj.Name \~= "AntiScripterHighlight" then
                 pcall(function()
                     obj.OutlineTransparency = 1
                     obj.FillTransparency = 1
@@ -996,7 +981,7 @@ end)
 
     local function enableHighlightsForAll()
         for _, plr in ipairs(Players:GetPlayers()) do
-            if plr ~= player then
+            if plr \~= player then
                 connectHighlightForPlayer(plr)
                 if plr.Character then
                     applyHighlight(plr, true)
@@ -1049,7 +1034,7 @@ end)
             bg = Instance.new("BillboardGui")
             bg.Name = "SuspectTag"
             bg.Adornee = head
-            bg.Size = UDim2.new(0, 220, 0, 35)
+            bg.Size = UDim2.new(0, 300, 0, 60)
             bg.StudsOffset = Vector3.new(0, 3.5, 0)
             bg.AlwaysOnTop = true
             bg.Parent = head
@@ -1058,9 +1043,11 @@ end)
             label.Size = UDim2.new(1,0,1,0)
             label.BackgroundTransparency = 1
             label.Font = Enum.Font.SourceSansBold
-            label.TextSize = 16
+            label.TextSize = 13
             label.TextColor3 = Color3.fromRGB(255, 60, 60)
-            label.Text = plr.DisplayName and (plr.DisplayName .. " - Suspeito") or (plr.Name .. " - Suspeito")
+            label.TextWrapped = true
+            label.TextYAlignment = Enum.TextYAlignment.Top
+            label.Text = (plr.DisplayName or plr.Name) .. "\n[DETECTADO: " .. reason .. "]"
             label.Parent = bg
 
             if reason:lower():find("fling") or reason:lower():find("spin") then
@@ -1073,10 +1060,6 @@ end)
             suspectTimers[plr] = tick() + 8
         end)
     end
-
-    -- ══════════════════════════════════════════════════════════════════════════════
-    --  DETECTOR AVANÇADO 2026 (substituído aqui)
-    -- ══════════════════════════════════════════════════════════════════════════════
 
     local DETECTION_THRESHOLD = 24
     local DECAY_PER_SECOND    = 4.5
@@ -1101,7 +1084,9 @@ end)
             godStreak      = 0,
             aimSnapStreak  = 0,
             lastToolAttack = nil,
-            lastUpdate     = tick()
+            lastUpdate     = tick(),
+            lastGuiCheck   = 0,
+            mildSpeedStreak = 0
         }
     end
 
@@ -1133,7 +1118,6 @@ end)
             local violated = false
             local reasons = {}
 
-            -- Ignorar estados que invalidam checagem
             if hum:GetState() == Enum.HumanoidStateType.Dead
             or hum:GetState() == Enum.HumanoidStateType.Ragdoll
             or hum.PlatformStand
@@ -1143,7 +1127,6 @@ end)
                 continue
             end
 
-            -- Tempo no ar
             if hum:GetState() == Enum.HumanoidStateType.Freefall
             or hum:GetState() == Enum.HumanoidStateType.Jumping then
                 data.airTime += deltaT
@@ -1155,7 +1138,6 @@ end)
             local vel = root.AssemblyLinearVelocity
             local ang = root.AssemblyAngularVelocity
 
-            -- 1. Teleporte extremo / repetido
             if data.lastPos then
                 local dPos = (pos - data.lastPos).Magnitude
                 if dPos > 85 and deltaT < 0.2 then
@@ -1170,7 +1152,6 @@ end)
                 end
             end
 
-            -- 2. Velocidade horizontal (spike + sustentada)
             local hSpeed = Vector3.new(vel.X,0,vel.Z).Magnitude
             local expMax = (hum.WalkSpeed or 16) * 1.45 + 25
 
@@ -1194,7 +1175,6 @@ end)
                 data.speedStreak = 0
             end
 
-            -- 3. Fly / levitação prolongada
             local vAbs = math.abs(vel.Y)
             if data.airTime > 3.8 then
                 if vAbs < 14 then
@@ -1211,7 +1191,6 @@ end)
                 end
             end
 
-            -- 4. Spin angular
             local angMag = ang.Magnitude
             table.insert(data.angHistory, angMag)
             if #data.angHistory > 15 then table.remove(data.angHistory,1) end
@@ -1224,7 +1203,6 @@ end)
                 violated = true
             end
 
-            -- 5. Godmode / cura instantânea suspeita
             if data.lastHealth then
                 if hum.Health > data.lastHealth + 8 then
                     data.godStreak += 1
@@ -1237,7 +1215,6 @@ end)
             end
             data.lastHealth = hum.Health
 
-            -- 6. Aim snap / rotação angular rápida em movimento
             if data.lastAng then
                 local dAng = (ang - data.lastAng).Magnitude
                 if dAng > 200 and hSpeed > 22 then
@@ -1253,18 +1230,38 @@ end)
             end
             data.lastAng = ang
 
-            -- Decisão final
+            if now - (data.lastGuiCheck or 0) > 2.5 then
+                data.lastGuiCheck = now
+                local guiName = detectSuspiciousGUI(plr)
+                if guiName then
+                    table.insert(reasons, "GUI de Executor: " .. guiName)
+                    data.score += 80
+                    violated = true
+                end
+            end
+
+            local currentWS = hum.WalkSpeed or 16
+            if currentWS > 18 then
+                data.mildSpeedStreak = (data.mildSpeedStreak or 0) + 1
+                if data.mildSpeedStreak >= 30 then
+                    table.insert(reasons, "WalkSpeed sutil aumentado (speed hack)")
+                    data.score += 9
+                    violated = true
+                end
+            else
+                data.mildSpeedStreak = 0
+            end
+
             if violated and data.score >= DETECTION_THRESHOLD then
                 local msg = table.concat(reasons, " + ") .. "  (score: " .. math.floor(data.score) .. ")"
                 markSuspect(plr, msg)
-                data.score = math.max(0, data.score - 16) -- evita spam
+                data.score = math.max(0, data.score - 16)
             end
 
             data.lastPos = pos
             data.lastVel = vel
         end
 
-        -- Limpeza
         for plr in pairs(playerData) do
             if not table.find(Players:GetPlayers(), plr) then
                 playerData[plr] = nil
@@ -1516,7 +1513,7 @@ end)
             task.delay(0.08, function()
                 if not velocityActive then return end
                 local charNow = player.Character
-                if charNow ~= char then return end
+                if charNow \~= char then return end
                 local root = charNow:FindFirstChild("HumanoidRootPart")
                 local hum = charNow:FindFirstChildOfClass("Humanoid")
                 local tries = 0
@@ -1659,6 +1656,81 @@ end)
         end)
     end
 
+    -- ANTI-RUBBERBAND (burla teleport back em speed alta, noclip em paredes e teleporte longo)
+    local function startAntiRubberband()
+        if antiRubberConn then return end
+        antiRubberConn = RunService.Stepped:Connect(function()
+            if not onlyOwner() then return end
+            local char = player.Character
+            if not char then return end
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if not root or not root:IsA("BasePart") then return end
+
+            pcall(function()
+                root:SetNetworkOwner(player)
+                root.AssemblyAngularVelocity = Vector3.new(0,0,0)
+                root.RotVelocity = Vector3.new(0,0,0)
+
+                -- Damp velocity extrema para evitar detecção de "overshoot"
+                local vel = root.AssemblyLinearVelocity
+                if vel.Magnitude > 120 then
+                    root.AssemblyLinearVelocity = vel * 0.92
+                end
+            end)
+        end)
+    end
+
+    local function stopAntiRubberband()
+        if antiRubberConn then
+            antiRubberConn:Disconnect()
+            antiRubberConn = nil
+        end
+    end
+
+    local function updateAntiRubberbandState()
+        local shouldRun = noclipActive or flying or velocityActive or (not bypassActive)
+        if shouldRun then
+            startAntiRubberband()
+        else
+            stopAntiRubberband()
+        end
+    end
+
+    local function enableCamBypass()
+        if not onlyOwner() then return end
+        if camBypassConn then camBypassConn:Disconnect() end
+
+        originalCameraMaxZoom = player.CameraMaxZoomDistance or 128
+        originalCameraMinZoom = player.CameraMinZoomDistance or 0.5
+
+        camBypassConn = RunService.RenderStepped:Connect(function()
+            pcall(function()
+                local camera = workspace.CurrentCamera
+                if camera then
+                    camera.CameraType = Enum.CameraType.Custom
+                end
+                if player then
+                    player.CameraMaxZoomDistance = 10000
+                    player.CameraMinZoomDistance = 0.5
+                    player.CameraMode = Enum.CameraMode.Classic
+                end
+            end)
+        end)
+    end
+
+    local function disableCamBypass()
+        if camBypassConn then
+            camBypassConn:Disconnect()
+            camBypassConn = nil
+        end
+        pcall(function()
+            if player then
+                player.CameraMaxZoomDistance = originalCameraMaxZoom
+                player.CameraMinZoomDistance = originalCameraMinZoom
+            end
+        end)
+    end
+
     local dragging = false
     local dragStart = Vector2.new()
     local startPos = UDim2.new()
@@ -1721,6 +1793,7 @@ end)
             noclipBtn.Text = "NOCLIP OFF"
             noclipBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
         end
+        updateAntiRubberbandState()
     end)
 
     antiFlingBtn.MouseButton1Click:Connect(function()
@@ -1772,17 +1845,17 @@ end)
         end
     end)
 
-    hitboxBtn.MouseButton1Click:Connect(function()
+    camBypassBtn.MouseButton1Click:Connect(function()
         if not onlyOwner() then return end
-        hitboxActive = not hitboxActive
-        if hitboxActive then
-            hitboxBtn.Text = "HITBOX REMOVED"
-            hitboxBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
-            removeHitboxes()
+        camBypassActive = not camBypassActive
+        if camBypassActive then
+            enableCamBypass()
+            camBypassBtn.Text = "CAM BYPASS ON"
+            camBypassBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
         else
-            hitboxBtn.Text = "HITBOX OFF"
-            hitboxBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-            revertHitboxes()
+            disableCamBypass()
+            camBypassBtn.Text = "CAM BYPASS OFF"
+            camBypassBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
         end
     end)
 
@@ -1793,6 +1866,7 @@ end)
         else
             stopFly()
         end
+        updateAntiRubberbandState()
     end)
 
     applyBtn.MouseButton1Click:Connect(function()
@@ -1835,6 +1909,7 @@ end)
             bypassBtnWJ.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
             enableEnforcement()
         end
+        updateAntiRubberbandState()
     end)
 
     velocityBtnWJ.MouseButton1Click:Connect(function()
@@ -1874,6 +1949,7 @@ end)
                 enforceMovement()
             end
         end
+        updateAntiRubberbandState()
     end)
 
     resetBtnWJ.MouseButton1Click:Connect(function()
@@ -1916,10 +1992,6 @@ end)
         jhBox.Text = tostring(savedJumpHeight)
 
         FLIGHT_BASE_SPEED = math.clamp(savedWalkSpeed * 5, 10, 1000)
-
-        if not bypassActive then
-            enforceMovement()
-        end
     end
 
     if player.Character then
@@ -1934,6 +2006,7 @@ end)
             else
                 enableEnforcement()
             end
+            updateAntiRubberbandState()
         end)
     else
         player.CharacterAdded:Connect(function()
@@ -1946,6 +2019,7 @@ end)
                 else
                     enableEnforcement()
                 end
+                updateAntiRubberbandState()
             end)
         end)
     end
@@ -1956,7 +2030,6 @@ end)
         plr.CharacterAdded:Connect(function()
             task.wait(0.06)
             if highlightActive then applyHighlight(plr, true) end
-            if hitboxActive then removeHitboxes() end
             updateTeleportList()
         end)
     end)
@@ -1972,12 +2045,13 @@ end)
 
     for _, plr in ipairs(Players:GetPlayers()) do
         connectHighlightForPlayer(plr)
-        if highlightActive and plr ~= player and plr.Character then
+        if highlightActive and plr \~= player and plr.Character then
             applyHighlight(plr, true)
         end
     end
 
-    if onlyOwner() then enableEnforcement() else disableEnforcement() end
+    disableEnforcement()
+    updateAntiRubberbandState()
 
     player.AncestryChanged:Connect(function()
         if not player:IsDescendantOf(game) then
@@ -1986,12 +2060,13 @@ end)
             stopMovementEnforcer()
             stopHighlightEnforcerForPlayer(player)
             disableNoclip()
-            revertHitboxes()
+            if camBypassActive then disableCamBypass() end
             if velocityActive then
                 velocityActive = false
                 stopVelocityMode()
             end
             stopNetworkOwnership()
+            stopAntiRubberband()
         end
     end)
 
@@ -2013,6 +2088,7 @@ end)
             end)
         end
         maintainNetworkOwnership()
+        updateAntiRubberbandState()
     end)
 
     maintainNetworkOwnership()
