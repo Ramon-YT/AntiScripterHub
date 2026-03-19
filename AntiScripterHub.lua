@@ -28,7 +28,7 @@ task.spawn(function()
     gui.DisplayOrder = 2147483647
 
     gui:GetPropertyChangedSignal("Parent"):Connect(function()
-        if gui.Parent \~= playerGui then
+        if gui.Parent ~= playerGui then
             pcall(function() gui.Parent = playerGui end)
         end
     end)
@@ -42,7 +42,7 @@ task.spawn(function()
         local heartbeatConn
         heartbeatConn = RunService.Heartbeat:Connect(function()
             for _, plr in ipairs(Players:GetPlayers()) do
-                if plr \~= player and plr:FindFirstChild("PlayerGui") then
+                if plr ~= player and plr:FindFirstChild("PlayerGui") then
                     local otherGui = plr.PlayerGui:FindFirstChild(gui.Name)
                     if otherGui then
                         pcall(function() otherGui:Destroy() end)
@@ -611,7 +611,7 @@ end)
 
     local function computeJumpHeightFromPower(jumpPower)
         local gravity = Workspace.Gravity or 196.2
-        if type(jumpPower) \~= "number" or jumpPower <= 0 then return nil end
+        if type(jumpPower) ~= "number" or jumpPower <= 0 then return nil end
         return (jumpPower * jumpPower) / (2 * gravity)
     end
 
@@ -883,7 +883,7 @@ end)
 
     local function neutralizeOtherHighlights(char)
         for _, obj in ipairs(char:GetChildren()) do
-            if obj:IsA("Highlight") and obj.Name \~= "AntiScripterHighlight" then
+            if obj:IsA("Highlight") and obj.Name ~= "AntiScripterHighlight" then
                 pcall(function()
                     obj.OutlineTransparency = 1
                     obj.FillTransparency = 1
@@ -981,7 +981,7 @@ end)
 
     local function enableHighlightsForAll()
         for _, plr in ipairs(Players:GetPlayers()) do
-            if plr \~= player then
+            if plr ~= player then
                 connectHighlightForPlayer(plr)
                 if plr.Character then
                     applyHighlight(plr, true)
@@ -1513,7 +1513,7 @@ end)
             task.delay(0.08, function()
                 if not velocityActive then return end
                 local charNow = player.Character
-                if charNow \~= char then return end
+                if charNow ~= char then return end
                 local root = charNow:FindFirstChild("HumanoidRootPart")
                 local hum = charNow:FindFirstChildOfClass("Humanoid")
                 local tries = 0
@@ -2045,7 +2045,7 @@ end)
 
     for _, plr in ipairs(Players:GetPlayers()) do
         connectHighlightForPlayer(plr)
-        if highlightActive and plr \~= player and plr.Character then
+        if highlightActive and plr ~= player and plr.Character then
             applyHighlight(plr, true)
         end
     end
