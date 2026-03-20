@@ -53,42 +53,42 @@ task.spawn(function()
     end
     
     -- ══════════════════════════════════════════════════════════════════════════════
---  DETECÇÃO DE TOQUE TRIPLO RÁPIDO (para destruir o GUI no celular)
--- ══════════════════════════════════════════════════════════════════════════════
+    --  DETECÇÃO DE TOQUE TRIPLO RÁPIDO (para destruir o GUI no celular)
+    -- ══════════════════════════════════════════════════════════════════════════════
 
-local touchCount = 0
-local lastTouchTime = 0
-local TOUCH_TRIPLE_THRESHOLD = 0.45
-local TOUCH_TRIPLE_RESET = 1.2
+    local touchCount = 0
+    local lastTouchTime = 0
+    local TOUCH_TRIPLE_THRESHOLD = 0.45
+    local TOUCH_TRIPLE_RESET = 1.2
 
-UserInputService.TouchTapInWorld:Connect(function(position, processedByUI)
-    if processedByUI then return end
+    UserInputService.TouchTapInWorld:Connect(function(position, processedByUI)
+        if processedByUI then return end
 
-    local currentTime = tick()
+        local currentTime = tick()
 
-    if currentTime - lastTouchTime > TOUCH_TRIPLE_RESET then
-        touchCount = 1
-    else
-        touchCount = touchCount + 1
-    end
+        if currentTime - lastTouchTime > TOUCH_TRIPLE_RESET then
+            touchCount = 1
+        else
+            touchCount = touchCount + 1
+        end
 
-    lastTouchTime = currentTime
+        lastTouchTime = currentTime
 
-    if touchCount >= 3 then
-        if onlyOwner() then
-            pcall(function()
-                gui:Destroy()
+        if touchCount >= 3 then
+            if onlyOwner() then
+                pcall(function()
+                    gui:Destroy()
+                    touchCount = 0
+                end)
+            end
+        end
+
+        task.delay(TOUCH_TRIPLE_RESET, function()
+            if tick() - lastTouchTime >= TOUCH_TRIPLE_RESET then
                 touchCount = 0
-            end)
-        end
-    end
-
-    task.delay(TOUCH_TRIPLE_RESET, function()
-        if tick() - lastTouchTime >= TOUCH_TRIPLE_RESET then
-            touchCount = 0
-        end
+            end
+        end)
     end)
-end)
 
     local function secureConnect(button, fn)
         button.MouseButton1Click:Connect(function(...)
@@ -381,7 +381,7 @@ end)
     local detectorActive = false
     local highlightActive = false
     local camBypassActive = false
-    local bypassActive = true   -- true = OFF (jogo controla normalmente)
+    local bypassActive = true
     local velocityActive = false
     local flying = false
 
@@ -391,7 +391,7 @@ end)
     local velocityConn = nil
     local velocityDeathConn = nil
     local camBypassConn = nil
-    local antiRubberConn = nil   -- NOVO: anti-rubberband global
+    local antiRubberConn = nil
 
     local savedWalkSpeed = 16
     local savedJumpHeight = 7.2
@@ -792,7 +792,6 @@ end)
                     local root = myChar.HumanoidRootPart
                     local targetCF = targetChar.HumanoidRootPart.CFrame * CFrame.new(0, 3, 0)
 
-                    -- TELEPORTE INCREMENTAL (anti-rubberband)
                     task.spawn(function()
                         for i = 1, 20 do
                             root.CFrame = root.CFrame:Lerp(targetCF, i / 20)
@@ -1063,7 +1062,6 @@ end)
 
     local DETECTION_THRESHOLD = 24
     local DECAY_PER_SECOND    = 4.5
-    local CONFIRMATION_FRAMES = 5
 
     local playerData = {}
 
@@ -1094,6 +1092,8 @@ end)
         if not detectorActive then return end
 
         local now = tick()
+        local tpCountThisFrame = 0
+        local recentTps = {}
 
         for _, plr in Players:GetPlayers() do
             if plr == player then continue end
@@ -1116,7 +1116,7 @@ end)
             data.score = math.max(0, data.score - DECAY_PER_SECOND * deltaT)
 
             local violated = false
-            local reasons = {}
+            local reasons = {}   -- <<< CORRIGIDO (era [] antes)
 
             if hum:GetState() == Enum.HumanoidStateType.Dead
             or hum:GetState() == Enum.HumanoidStateType.Ragdoll
@@ -1140,11 +1140,13 @@ end)
 
             if data.lastPos then
                 local dPos = (pos - data.lastPos).Magnitude
-                if dPos > 85 and deltaT < 0.2 then
+                if dPos > 120 and deltaT < 0.25 then
+                    recentTps[plr] = true
+                    tpCountThisFrame = tpCountThisFrame + 1
                     data.tpStreak = data.tpStreak + 1
-                    if data.tpStreak >= 2 then
+                    if data.tpStreak >= 3 then
                         table.insert(reasons, "Teleporte repetido")
-                        data.score += 20
+                        data.score += 25
                         violated = true
                     end
                 else
@@ -1176,10 +1178,10 @@ end)
             end
 
             local vAbs = math.abs(vel.Y)
-            if data.airTime > 3.8 then
+            if data.airTime > 3.0 then
                 if vAbs < 14 then
                     data.flyStreak += 1
-                    if data.flyStreak >= 7 then
+                    if data.flyStreak >= 6 then
                         table.insert(reasons, "Fly / levitação prolongada")
                         data.score += 15
                         violated = true
@@ -1217,11 +1219,11 @@ end)
 
             if data.lastAng then
                 local dAng = (ang - data.lastAng).Magnitude
-                if dAng > 200 and hSpeed > 22 then
+                if dAng > 160 and hSpeed > 18 then
                     data.aimSnapStreak += 1
-                    if data.aimSnapStreak >= 5 then
+                    if data.aimSnapStreak >= 4 then
                         table.insert(reasons, "Aim snap / rotação suspeita")
-                        data.score += 11
+                        data.score += 13
                         violated = true
                     end
                 else
@@ -1243,13 +1245,20 @@ end)
             local currentWS = hum.WalkSpeed or 16
             if currentWS > 18 then
                 data.mildSpeedStreak = (data.mildSpeedStreak or 0) + 1
-                if data.mildSpeedStreak >= 30 then
+                if data.mildSpeedStreak >= 20 then
                     table.insert(reasons, "WalkSpeed sutil aumentado (speed hack)")
-                    data.score += 9
+                    data.score += 12
                     violated = true
                 end
             else
                 data.mildSpeedStreak = 0
+            end
+
+            local head = char:FindFirstChild("Head")
+            if head and head.Transparency > 0.75 and hSpeed > 8 then
+                table.insert(reasons, "Invisibilidade suspeita (cabeça)")
+                data.score += 22
+                violated = true
             end
 
             if violated and data.score >= DETECTION_THRESHOLD then
@@ -1260,6 +1269,31 @@ end)
 
             data.lastPos = pos
             data.lastVel = vel
+        end
+
+        if tpCountThisFrame >= 4 then
+            for tplr, _ in pairs(recentTps) do
+                local data = playerData[tplr]
+                if data then
+                    data.tpStreak = 0
+                    data.score = math.max(0, data.score - 30)
+                end
+            end
+        end
+
+        for plrExpire, expireTime in pairs(suspectTimers) do
+            if now > expireTime then
+                pcall(function()
+                    if plrExpire and plrExpire.Character then
+                        local head = plrExpire.Character:FindFirstChild("Head")
+                        if head then
+                            local tag = head:FindFirstChild("SuspectTag")
+                            if tag then tag:Destroy() end
+                        end
+                    end
+                end)
+                suspectTimers[plrExpire] = nil
+            end
         end
 
         for plr in pairs(playerData) do
@@ -1362,7 +1396,7 @@ end)
 
     UserInputService.JumpRequest:Connect(function()
         verticalTarget = 1
-        delay(0.12, function()
+        task.delay(0.12, function()
             if verticalTarget == 1 then verticalTarget = 0 end
         end)
     end)
@@ -1501,7 +1535,7 @@ end)
     end)
 
     player.CharacterAdded:Connect(function(char)
-        wait(0.35)
+        task.wait(0.35)
         stopFly()
         if velocityActive then
             if velocityConn then
@@ -1544,7 +1578,7 @@ end)
     end)
 
     if player.Character then
-        wait(0.35)
+        task.wait(0.35)
         stopFly()
     end
 
@@ -1656,7 +1690,6 @@ end)
         end)
     end
 
-    -- ANTI-RUBBERBAND (burla teleport back em speed alta, noclip em paredes e teleporte longo)
     local function startAntiRubberband()
         if antiRubberConn then return end
         antiRubberConn = RunService.Stepped:Connect(function()
@@ -1671,7 +1704,6 @@ end)
                 root.AssemblyAngularVelocity = Vector3.new(0,0,0)
                 root.RotVelocity = Vector3.new(0,0,0)
 
-                -- Damp velocity extrema para evitar detecção de "overshoot"
                 local vel = root.AssemblyLinearVelocity
                 if vel.Magnitude > 120 then
                     root.AssemblyLinearVelocity = vel * 0.92
