@@ -1,6 +1,9 @@
--- AntiScripter (versão final: sem toque triplo para destruir, evita GUIs duplicadas)
--- Mantém correções de anti-fling (R15), detector refinado, cam bypass reforçado,
--- e remove limites superiores de WalkSpeed/JumpHeight.
+-- AntiScripter (versão final: cam bypass com override imediato e restauração de cutscenes)
+-- Funcionalidades:
+-- - Anti-fling robusto para R15 (salva/restaura CanCollide, reposiciona no chão)
+-- - Detector refinado (reduz falsos positivos)
+-- - Cam bypass que força imediatamente a câmera para o jogador quando ativo,
+--   e restaura exatamente o estado anterior (incluindo cutscenes Scriptable) ao desativar.
 -- Cole este script como LocalScript em StarterPlayerScripts ou PlayerScripts.
 
 task.spawn(function()
@@ -25,14 +28,12 @@ task.spawn(function()
         return Players.LocalPlayer and Players.LocalPlayer.UserId == OWNER_USERID
     end
 
-    -- If an instance of this GUI already exists in PlayerGui, do not create a second instance.
+    -- Prevent duplicate GUIs: if one already exists, stop creating another
     local existingGui = playerGui:FindFirstChild(GUI_NAME)
     if existingGui then
-        -- Another instance already running; exit this script to avoid duplicates.
         return
     end
 
-    -- GUI base (cria a primeira instância)
     local gui = Instance.new("ScreenGui")
     gui.Name = GUI_NAME
     gui.ResetOnSpawn = false
@@ -41,15 +42,13 @@ task.spawn(function()
     gui.Parent = playerGui
     gui.DisplayOrder = 2147483647
 
-    -- Ensure any future GUIs with the same name that appear in PlayerGui are destroyed,
-    -- mantendo apenas esta primeira instância.
+    -- Destroy any future GUIs with same name (keep only this one)
     playerGui.ChildAdded:Connect(function(child)
         if child and child:IsA("ScreenGui") and child.Name == GUI_NAME and child ~= gui then
             pcall(function() child:Destroy() end)
         end
     end)
 
-    -- Protege contra remoção acidental do GUI (tenta recolocar se for removido)
     gui:GetPropertyChangedSignal("Parent"):Connect(function()
         if gui.Parent ~= playerGui then
             pcall(function() gui.Parent = playerGui end)
@@ -61,7 +60,6 @@ task.spawn(function()
         end
     end)
 
-    -- Remove cópias do GUI em outros jogadores (mantido)
     do
         local heartbeatConn
         heartbeatConn = RunService.Heartbeat:Connect(function()
@@ -76,7 +74,6 @@ task.spawn(function()
         end)
     end
 
-    -- secureConnect helper
     local function secureConnect(button, fn)
         button.MouseButton1Click:Connect(function(...)
             if not onlyOwner() then return end
@@ -84,7 +81,7 @@ task.spawn(function()
         end)
     end
 
-    -- UI elements
+    -- UI (estrutura mantida)
     local mainBtn = Instance.new("TextButton")
     mainBtn.Size = UDim2.new(0, 50, 0, 50)
     local savedX = player:GetAttribute("BotaoPosX") or 40
@@ -380,6 +377,10 @@ task.spawn(function()
     local velocityConn = nil
     local velocityDeathConn = nil
     local camBypassConn = nil
+    local camForceConn = nil
+    local camTypeConn = nil
+    local camCFrameConn = nil
+    local camCurrentCameraConn = nil
     local antiRubberConn = nil
 
     local savedWalkSpeed = 16
@@ -394,6 +395,109 @@ task.spawn(function()
 
     local savedCanCollide = {}
     local originalHipHeight = nil
+
+    -- New: saved camera state for restoration when disabling cam bypass
+    local savedCameraState = nil
+
+    -- Helper: safely get current camera
+    local function getCurrentCamera()
+        local ok, cam = pcall(function() return Workspace.CurrentCamera end)
+        if ok then return cam end
+        return nil
+    end
+
+    -- Aggressive attach: when camera instance changes, reattach listeners
+    local function attachCameraListeners(camera)
+        if not camera then return end
+
+        -- Disconnect previous camera property listeners if any
+        if camForceConn then camForceConn:Disconnect(); camForceConn = nil end
+        if camTypeConn then camTypeConn:Disconnect(); camTypeConn = nil end
+        if camCFrameConn then camCFrameConn:Disconnect(); camCFrameConn = nil end
+
+        -- Immediate override on any property change: CameraSubject, CameraType, CFrame
+        camForceConn = camera:GetPropertyChangedSignal("CameraSubject"):Connect(function()
+            pcall(function()
+                if not camBypassActive then return end
+                local camNow = getCurrentCamera()
+                if not camNow then return end
+                if player and player.Character then
+                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                    if hum and camNow.CameraSubject ~= hum then
+                        camNow.CameraSubject = hum
+                    end
+                end
+            end)
+        end)
+
+        camTypeConn = camera:GetPropertyChangedSignal("CameraType"):Connect(function()
+            pcall(function()
+                if not camBypassActive then return end
+                local camNow = getCurrentCamera()
+                if not camNow then return end
+                if camNow.CameraType ~= Enum.CameraType.Custom then
+                    camNow.CameraType = Enum.CameraType.Custom
+                end
+            end)
+        end)
+
+        -- Some games set Camera.CFrame directly (scriptable cutscenes). When bypass is active,
+        -- we do not continuously override CFrame (so player can look around), but we must immediately
+        -- reapply CameraSubject so control returns to player. Listen for CFrame changes and reapply subject/type.
+        camCFrameConn = camera:GetPropertyChangedSignal("CFrame"):Connect(function()
+            pcall(function()
+                if not camBypassActive then return end
+                local camNow = getCurrentCamera()
+                if not camNow then return end
+                if player and player.Character then
+                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                    if hum and camNow.CameraSubject ~= hum then
+                        camNow.CameraSubject = hum
+                    end
+                    if camNow.CameraType ~= Enum.CameraType.Custom then
+                        camNow.CameraType = Enum.CameraType.Custom
+                    end
+                end
+            end)
+        end)
+
+        -- Also listen to Changed event for immediate reaction to any other modifications
+        camera.Changed:Connect(function(prop)
+            pcall(function()
+                if not camBypassActive then return end
+                local camNow = getCurrentCamera()
+                if not camNow then return end
+                if player and player.Character then
+                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        if camNow.CameraSubject ~= hum then camNow.CameraSubject = hum end
+                        if camNow.CameraType ~= Enum.CameraType.Custom then camNow.CameraType = Enum.CameraType.Custom end
+                    end
+                end
+            end)
+        end)
+    end
+
+    -- When workspace.CurrentCamera changes, reattach listeners and immediately enforce
+    local function attachCurrentCameraWatcher()
+        if camCurrentCameraConn then camCurrentCameraConn:Disconnect(); camCurrentCameraConn = nil end
+        camCurrentCameraConn = Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+            pcall(function()
+                local camNow = getCurrentCamera()
+                if camNow and camBypassActive then
+                    attachCameraListeners(camNow)
+                    -- immediate enforcement
+                    if player and player.Character then
+                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                        if hum then
+                            camNow.CameraSubject = hum
+                            camNow.CameraType = Enum.CameraType.Custom
+                        end
+                    end
+                end
+            end)
+        end)
+    end
 
     local function maintainNetworkOwnership()
         if ownershipConn then ownershipConn:Disconnect() end
@@ -461,7 +565,6 @@ task.spawn(function()
         pcall(function()
             if not velocityActive then
                 if type(savedWalkSpeed) == "number" and savedWalkSpeed > 0 then
-                    -- removed upper clamp: allow any positive WalkSpeed
                     hum.WalkSpeed = math.max(savedWalkSpeed, 0)
                 end
             end
@@ -469,7 +572,6 @@ task.spawn(function()
             if type(savedJumpHeight) == "number" and savedJumpHeight >= 0 then
                 local gravity = Workspace.Gravity or 196.2
                 local jumpPower = math.sqrt(math.max(savedJumpHeight, 0) * 2 * gravity)
-                -- removed upper clamp on JumpPower/JumpHeight
                 hum.JumpPower = jumpPower
                 pcall(function() hum.JumpHeight = savedJumpHeight end)
             end
@@ -1877,7 +1979,6 @@ task.spawn(function()
         end)
     end
 
-    local antiRubberConn = nil
     local function startAntiRubberband()
         if antiRubberConn then return end
         antiRubberConn = RunService.Stepped:Connect(function()
@@ -1916,49 +2017,77 @@ task.spawn(function()
         end
     end
 
-    local camForceConn = nil
+    -- CAM BYPASS (reforçado com override imediato e restauração)
     local function enableCamBypass()
         if not onlyOwner() then return end
-        if camBypassConn then camBypassConn:Disconnect() end
+        if camBypassConn then return end
 
-        originalCameraMaxZoom = player.CameraMaxZoomDistance or 128
-        originalCameraMinZoom = player.CameraMinZoomDistance or 0.5
+        local camera = getCurrentCamera()
+        if not camera then
+            camera = Workspace:WaitForChild("CurrentCamera", 1)
+            if not camera then return end
+        end
 
-        camBypassConn = RunService.RenderStepped:Connect(function()
+        -- Save original camera state only once (so toggling on/off restores correctly)
+        if not savedCameraState then
+            savedCameraState = {
+                CameraSubject = camera.CameraSubject,
+                CameraType = camera.CameraType,
+                CameraMode = player.CameraMode,
+                CameraCFrame = (pcall(function() return camera.CFrame end) and camera.CFrame) or nil,
+                CameraMaxZoomDistance = player.CameraMaxZoomDistance,
+                CameraMinZoomDistance = player.CameraMinZoomDistance
+            }
+        end
+
+        -- Immediate enforcement function (called whenever we detect a change)
+        local function enforceNow()
             pcall(function()
-                local camera = workspace.CurrentCamera
-                if camera then
-                    if camera.CameraType ~= Enum.CameraType.Custom then
-                        camera.CameraType = Enum.CameraType.Custom
-                    end
-                    local char = player.Character
-                    if char then
-                        local hum = char:FindFirstChildOfClass("Humanoid")
-                        if hum and camera.CameraSubject ~= hum then
-                            camera.CameraSubject = hum
-                        end
+                local camNow = getCurrentCamera()
+                if not camNow then return end
+                if player and player.Character then
+                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        -- immediate reapply
+                        camNow.CameraSubject = hum
+                        camNow.CameraType = Enum.CameraType.Custom
                     end
                 end
-                if player then
-                    if player.CameraMaxZoomDistance ~= 10000 then player.CameraMaxZoomDistance = 10000 end
-                    if player.CameraMinZoomDistance ~= 0.5 then player.CameraMinZoomDistance = 0.5 end
-                    if player.CameraMode ~= Enum.CameraMode.Classic then player.CameraMode = Enum.CameraMode.Classic end
-                end
-            end)
-        end)
-
-        if workspace.CurrentCamera then
-            if camForceConn then camForceConn:Disconnect() end
-            camForceConn = workspace.CurrentCamera:GetPropertyChangedSignal("CameraSubject"):Connect(function()
-                pcall(function()
-                    local camera = workspace.CurrentCamera
-                    if camera and player and player.Character then
-                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
-                        if hum then camera.CameraSubject = hum end
-                    end
-                end)
+                -- enforce player zooms/mode
+                if player.CameraMode ~= Enum.CameraMode.Classic then player.CameraMode = Enum.CameraMode.Classic end
+                if player.CameraMaxZoomDistance ~= 10000 then player.CameraMaxZoomDistance = 10000 end
+                if player.CameraMinZoomDistance ~= 0.5 then player.CameraMinZoomDistance = 0.5 end
             end)
         end
+
+        -- RenderStepped enforcer: continuous per-frame enforcement (keeps camera on player)
+        camBypassConn = RunService.RenderStepped:Connect(function()
+            if not camBypassActive then return end
+            enforceNow()
+        end)
+
+        -- Attach listeners to current camera to react immediately to any external change
+        attachCameraListeners(camera)
+
+        -- Watch for workspace.CurrentCamera replacement and reattach
+        attachCurrentCameraWatcher()
+
+        -- Also listen for new Camera instances added to workspace (some games create new Camera objects)
+        Workspace.ChildAdded:Connect(function(child)
+            if not camBypassActive then return end
+            if child and child:IsA("Camera") then
+                task.delay(0, function()
+                    local camNow = getCurrentCamera()
+                    if camNow then
+                        attachCameraListeners(camNow)
+                        enforceNow()
+                    end
+                end)
+            end
+        end)
+
+        -- Immediate enforcement once
+        enforceNow()
     end
 
     local function disableCamBypass()
@@ -1970,22 +2099,61 @@ task.spawn(function()
             camForceConn:Disconnect()
             camForceConn = nil
         end
+        if camTypeConn then
+            camTypeConn:Disconnect()
+            camTypeConn = nil
+        end
+        if camCFrameConn then
+            camCFrameConn:Disconnect()
+            camCFrameConn = nil
+        end
+        if camCurrentCameraConn then
+            camCurrentCameraConn:Disconnect()
+            camCurrentCameraConn = nil
+        end
+
         pcall(function()
-            if player then
-                player.CameraMaxZoomDistance = originalCameraMaxZoom
-                player.CameraMinZoomDistance = originalCameraMinZoom
-            end
-            local camera = workspace.CurrentCamera
-            if camera then
-                if player.Character then
+            local camera = getCurrentCamera()
+            if camera and savedCameraState then
+                -- Restore player zooms and mode first
+                if player then
+                    if player.CameraMaxZoomDistance ~= savedCameraState.CameraMaxZoomDistance then
+                        player.CameraMaxZoomDistance = savedCameraState.CameraMaxZoomDistance or originalCameraMaxZoom
+                    end
+                    if player.CameraMinZoomDistance ~= savedCameraState.CameraMinZoomDistance then
+                        player.CameraMinZoomDistance = savedCameraState.CameraMinZoomDistance or originalCameraMinZoom
+                    end
+                    if player.CameraMode ~= savedCameraState.CameraMode then
+                        player.CameraMode = savedCameraState.CameraMode or Enum.CameraMode.Classic
+                    end
+                end
+
+                -- Restore CameraType and CameraSubject
+                if savedCameraState.CameraType then
+                    camera.CameraType = savedCameraState.CameraType
+                end
+                if savedCameraState.CameraSubject then
+                    camera.CameraSubject = savedCameraState.CameraSubject
+                end
+
+                -- If original camera was Scriptable (cutscene), restore its CFrame so cutscene resumes
+                if savedCameraState.CameraType == Enum.CameraType.Scriptable and savedCameraState.CameraCFrame then
+                    pcall(function() camera.CFrame = savedCameraState.CameraCFrame end)
+                end
+            else
+                -- Fallback: ensure camera subject is player's humanoid
+                if camera and player and player.Character then
                     local hum = player.Character:FindFirstChildOfClass("Humanoid")
                     if hum then
                         camera.CameraSubject = hum
+                        camera.CameraType = Enum.CameraType.Custom
                     end
                 end
-                camera.CameraType = Enum.CameraType.Custom
             end
         end)
+
+        -- Clear saved state so next enable captures fresh state
+        savedCameraState = nil
     end
 
     -- Dragging main button
@@ -2351,6 +2519,9 @@ task.spawn(function()
         maintainNetworkOwnership()
         updateAntiRubberbandState()
     end)
+
+    -- Ensure we watch for camera replacements from the start
+    attachCurrentCameraWatcher()
 
     maintainNetworkOwnership()
 end)
