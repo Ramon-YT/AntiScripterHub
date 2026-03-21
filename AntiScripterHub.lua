@@ -1,6 +1,7 @@
--- AntiScripter (versão atualizada: limites de WalkSpeed/JumpHeight removidos)
--- Correções: anti-fling R15 (restauração robusta), detector refinado, cam bypass reforçado.
--- Removidos limites máximos para WalkSpeed e JumpHeight/JumpPower (aplicados apenas limites inferiores).
+-- AntiScripter (versão final: sem toque triplo para destruir, evita GUIs duplicadas)
+-- Mantém correções de anti-fling (R15), detector refinado, cam bypass reforçado,
+-- e remove limites superiores de WalkSpeed/JumpHeight.
+-- Cole este script como LocalScript em StarterPlayerScripts ou PlayerScripts.
 
 task.spawn(function()
     local Players = game:GetService("Players")
@@ -18,19 +19,37 @@ task.spawn(function()
 
     local OWNER_USERID = player.UserId
     local PLACE_KEY = tostring(game.PlaceId)
+    local GUI_NAME = "AntiScripterGUI_" .. tostring(OWNER_USERID)
 
     local function onlyOwner()
         return Players.LocalPlayer and Players.LocalPlayer.UserId == OWNER_USERID
     end
 
+    -- If an instance of this GUI already exists in PlayerGui, do not create a second instance.
+    local existingGui = playerGui:FindFirstChild(GUI_NAME)
+    if existingGui then
+        -- Another instance already running; exit this script to avoid duplicates.
+        return
+    end
+
+    -- GUI base (cria a primeira instância)
     local gui = Instance.new("ScreenGui")
-    gui.Name = "AntiScripterGUI_" .. tostring(OWNER_USERID)
+    gui.Name = GUI_NAME
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     gui.Parent = playerGui
     gui.DisplayOrder = 2147483647
 
+    -- Ensure any future GUIs with the same name that appear in PlayerGui are destroyed,
+    -- mantendo apenas esta primeira instância.
+    playerGui.ChildAdded:Connect(function(child)
+        if child and child:IsA("ScreenGui") and child.Name == GUI_NAME and child ~= gui then
+            pcall(function() child:Destroy() end)
+        end
+    end)
+
+    -- Protege contra remoção acidental do GUI (tenta recolocar se for removido)
     gui:GetPropertyChangedSignal("Parent"):Connect(function()
         if gui.Parent ~= playerGui then
             pcall(function() gui.Parent = playerGui end)
@@ -42,6 +61,7 @@ task.spawn(function()
         end
     end)
 
+    -- Remove cópias do GUI em outros jogadores (mantido)
     do
         local heartbeatConn
         heartbeatConn = RunService.Heartbeat:Connect(function()
@@ -56,40 +76,7 @@ task.spawn(function()
         end)
     end
 
-    -- touch triple to destroy gui
-    local touchCount = 0
-    local lastTouchTime = 0
-    local TOUCH_TRIPLE_RESET = 1.2
-
-    UserInputService.TouchTapInWorld:Connect(function(position, processedByUI)
-        if processedByUI then return end
-
-        local currentTime = tick()
-
-        if currentTime - lastTouchTime > TOUCH_TRIPLE_RESET then
-            touchCount = 1
-        else
-            touchCount = touchCount + 1
-        end
-
-        lastTouchTime = currentTime
-
-        if touchCount >= 3 then
-            if onlyOwner() then
-                pcall(function()
-                    gui:Destroy()
-                    touchCount = 0
-                end)
-            end
-        end
-
-        task.delay(TOUCH_TRIPLE_RESET, function()
-            if tick() - lastTouchTime >= TOUCH_TRIPLE_RESET then
-                touchCount = 0
-            end
-        end)
-    end)
-
+    -- secureConnect helper
     local function secureConnect(button, fn)
         button.MouseButton1Click:Connect(function(...)
             if not onlyOwner() then return end
@@ -97,7 +84,7 @@ task.spawn(function()
         end)
     end
 
-    -- UI (estrutura mantida)
+    -- UI elements
     local mainBtn = Instance.new("TextButton")
     mainBtn.Size = UDim2.new(0, 50, 0, 50)
     local savedX = player:GetAttribute("BotaoPosX") or 40
