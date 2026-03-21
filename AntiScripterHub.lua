@@ -403,6 +403,10 @@ task.spawn(function()
     local originalCameraMaxZoom = player.CameraMaxZoomDistance or 128
     local originalCameraMinZoom = player.CameraMinZoomDistance or 0.5
 
+    -- NEW: store original CanCollide states and original HipHeight for proper restore
+    local savedCanCollide = {}
+    local originalHipHeight = nil
+
     local function maintainNetworkOwnership()
         if ownershipConn then ownershipConn:Disconnect() end
         ownershipConn = RunService.Heartbeat:Connect(function()
@@ -696,15 +700,32 @@ task.spawn(function()
         end
     end
 
+    -- UPDATED noclip functions (R15-friendly)
     local function enableNoclip()
         if not onlyOwner() then return end
         if noclipConn then noclipConn:Disconnect() end
+
+        -- reset saved table
+        savedCanCollide = {}
+        originalHipHeight = nil
+
         noclipConn = RunService.Stepped:Connect(function()
             pcall(function()
                 local char = player.Character
                 if char then
+                    -- cache humanoid hip height once
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if hum and originalHipHeight == nil then
+                        -- store original HipHeight if available
+                        pcall(function() originalHipHeight = hum.HipHeight end)
+                    end
+
                     for _, part in ipairs(char:GetDescendants()) do
                         if part:IsA("BasePart") and not part.Anchored then
+                            -- save original CanCollide only once per part
+                            if savedCanCollide[part] == nil then
+                                savedCanCollide[part] = part.CanCollide
+                            end
                             part.CanCollide = false
                         end
                     end
@@ -723,36 +744,67 @@ task.spawn(function()
 
         pcall(function()
             local char = player.Character
-            if not char then return end
-
-            for i = 1, 6 do
-                for _, part in ipairs(char:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        part.CanCollide = true
-                    end
-                end
-                task.wait(0.02)
+            if not char then
+                -- clear saved table to avoid memory leak
+                savedCanCollide = {}
+                originalHipHeight = nil
+                return
             end
+
+            -- Restore saved CanCollide states first
+            for part, original in pairs(savedCanCollide) do
+                if part and part.Parent then
+                    -- restore only if the part still exists
+                    pcall(function()
+                        part.CanCollide = original
+                    end)
+                end
+            end
+            -- clear saved table
+            savedCanCollide = {}
+
+            -- Small delay to let physics settle after restoring collisions
+            task.wait(0.06)
 
             local root = char:FindFirstChild("HumanoidRootPart")
             local hum = char:FindFirstChildOfClass("Humanoid")
 
+            -- Avoid hard zeroing velocities; gently clamp vertical velocity to avoid snap
             if root then
-                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-                root.Velocity = Vector3.new(0, 0, 0)
-                root.RotVelocity = Vector3.new(0, 0, 0)
+                pcall(function()
+                    local ok, av = pcall(function() return root.AssemblyLinearVelocity end)
+                    if ok and av then
+                        -- keep horizontal velocity zeroed but preserve reasonable Y to avoid teleport snap
+                        root.AssemblyLinearVelocity = Vector3.new(0, math.clamp(av.Y, -50, 50), 0)
+                    else
+                        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                    end
+                    root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                    -- do not forcibly set Velocity/RoTVelocity to zero; let physics settle
+                end)
             end
 
             if hum then
+                -- restore HipHeight if we saved it (helps R15 return to ground)
+                if originalHipHeight ~= nil then
+                    pcall(function() hum.HipHeight = originalHipHeight end)
+                    originalHipHeight = nil
+                end
+
+                -- ensure humanoid is not stuck in PlatformStand and let it recover naturally
                 pcall(function() hum.PlatformStand = false end)
                 hum.Sit = false
                 hum.AutoRotate = true
-                hum:ChangeState(Enum.HumanoidStateType.Physics)
+
+                -- Use a short, gentle state sequence to let the engine re-evaluate collisions
+                -- Prefer GettingUp -> Running for R15; avoid Physics which can cause odd snaps
+                pcall(function()
+                    hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+                end)
                 task.wait(0.06)
-                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-                task.wait(0.06)
-                hum:ChangeState(Enum.HumanoidStateType.Running)
+                pcall(function()
+                    hum:ChangeState(Enum.HumanoidStateType.Running)
+                end)
             end
         end)
     end
