@@ -1,3 +1,7 @@
+-- AntiScripter (versão atualizada: limites de WalkSpeed/JumpHeight removidos)
+-- Correções: anti-fling R15 (restauração robusta), detector refinado, cam bypass reforçado.
+-- Removidos limites máximos para WalkSpeed e JumpHeight/JumpPower (aplicados apenas limites inferiores).
+
 task.spawn(function()
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
@@ -51,14 +55,10 @@ task.spawn(function()
             end
         end)
     end
-    
-    -- ══════════════════════════════════════════════════════════════════════════════
-    --  DETECÇÃO DE TOQUE TRIPLO RÁPIDO (para destruir o GUI no celular)
-    -- ══════════════════════════════════════════════════════════════════════════════
 
+    -- touch triple to destroy gui
     local touchCount = 0
     local lastTouchTime = 0
-    local TOUCH_TRIPLE_THRESHOLD = 0.45
     local TOUCH_TRIPLE_RESET = 1.2
 
     UserInputService.TouchTapInWorld:Connect(function(position, processedByUI)
@@ -97,6 +97,7 @@ task.spawn(function()
         end)
     end
 
+    -- UI (estrutura mantida)
     local mainBtn = Instance.new("TextButton")
     mainBtn.Size = UDim2.new(0, 50, 0, 50)
     local savedX = player:GetAttribute("BotaoPosX") or 40
@@ -376,6 +377,7 @@ task.spawn(function()
         content.Visible = true
     end)
 
+    -- state variables
     local noclipActive = false
     local antiFlingActive = false
     local detectorActive = false
@@ -403,7 +405,6 @@ task.spawn(function()
     local originalCameraMaxZoom = player.CameraMaxZoomDistance or 128
     local originalCameraMinZoom = player.CameraMinZoomDistance or 0.5
 
-    -- NEW: store original CanCollide states and original HipHeight for proper restore
     local savedCanCollide = {}
     local originalHipHeight = nil
 
@@ -442,15 +443,12 @@ task.spawn(function()
     local flingOffenders = {}
     local launchedPlayers = {}
 
-    local WALK_SPEED_LIMIT = 200
-    local JUMP_HEIGHT_LIMIT = 50
     local ANGULAR_SPEED_LIMIT = 30
-    local LAUNCH_Y_THRESHOLD = -50
 
     local suspectTimers = {}
 
     local SUSPICIOUS_GUI_KEYWORDS = {
-        "fluxus", "delta", "synapse", "krnl", "solara", "wave", "celery", "vega", "executor", 
+        "fluxus", "delta", "synapse", "krnl", "solara", "wave", "celery", "vega", "executor",
         "infyield", "iy", "dex", "darkdex", "synx", "scripthub", "console", "menu", "hub"
     }
 
@@ -476,16 +474,17 @@ task.spawn(function()
         pcall(function()
             if not velocityActive then
                 if type(savedWalkSpeed) == "number" and savedWalkSpeed > 0 then
-                    hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
+                    -- removed upper clamp: allow any positive WalkSpeed
+                    hum.WalkSpeed = math.max(savedWalkSpeed, 0)
                 end
             end
 
             if type(savedJumpHeight) == "number" and savedJumpHeight >= 0 then
                 local gravity = Workspace.Gravity or 196.2
                 local jumpPower = math.sqrt(math.max(savedJumpHeight, 0) * 2 * gravity)
-                local maxJumpPower = math.sqrt(JUMP_HEIGHT_LIMIT * 2 * gravity)
-                hum.JumpPower = math.clamp(jumpPower, 0, maxJumpPower)
-                pcall(function() hum.JumpHeight = math.clamp(savedJumpHeight, 0, JUMP_HEIGHT_LIMIT) end)
+                -- removed upper clamp on JumpPower/JumpHeight
+                hum.JumpPower = jumpPower
+                pcall(function() hum.JumpHeight = savedJumpHeight end)
             end
         end)
     end
@@ -542,14 +541,14 @@ task.spawn(function()
             pcall(function()
                 if not velocityActive then
                     if type(savedWalkSpeed) == "number" and savedWalkSpeed > 0 then
-                        hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
+                        hum.WalkSpeed = math.max(savedWalkSpeed, 0)
                     end
                 end
                 if type(savedJumpHeight) == "number" and savedJumpHeight >= 0 then
                     local gravity = Workspace.Gravity or 196.2
                     local jumpPower = math.sqrt(math.max(savedJumpHeight, 0) * 2 * gravity)
-                    hum.JumpPower = math.clamp(jumpPower, 0, math.sqrt(JUMP_HEIGHT_LIMIT * 2 * gravity))
-                    pcall(function() hum.JumpHeight = math.clamp(savedJumpHeight, 0, JUMP_HEIGHT_LIMIT) end)
+                    hum.JumpPower = jumpPower
+                    pcall(function() hum.JumpHeight = savedJumpHeight end)
                 end
             end)
         end)
@@ -571,16 +570,16 @@ task.spawn(function()
 
         makePropWatcher("WalkSpeed", function()
             if not velocityActive then
-                hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
+                hum.WalkSpeed = math.max(savedWalkSpeed, 0)
             end
         end)
         makePropWatcher("JumpPower", function()
             local gravity = Workspace.Gravity or 196.2
             local jumpPower = math.sqrt(math.max(savedJumpHeight, 0) * 2 * gravity)
-            hum.JumpPower = math.clamp(jumpPower, 0, math.sqrt(JUMP_HEIGHT_LIMIT * 2 * gravity))
+            hum.JumpPower = jumpPower
         end)
         makePropWatcher("JumpHeight", function()
-            hum.JumpHeight = math.clamp(savedJumpHeight, 0, JUMP_HEIGHT_LIMIT)
+            hum.JumpHeight = savedJumpHeight
         end)
 
         diedConn = hum.Died:Connect(function()
@@ -646,6 +645,9 @@ task.spawn(function()
         return savedWalkSpeed, savedJumpHeight
     end
 
+    local flingOffenders = {}
+    local launchedPlayers = {}
+
     local function updateAntiFling()
         if not onlyOwner() then return end
         pcall(function()
@@ -656,14 +658,124 @@ task.spawn(function()
 
             root.CanCollide = not antiFlingActive
 
-            for _, obj in ipairs(root:GetChildren()) do
+            for _, obj in ipairs(char:GetDescendants()) do
                 if obj:IsA("BodyMover") or obj:IsA("BodyForce") or obj:IsA("BodyVelocity")
                 or obj:IsA("BodyAngularVelocity") or obj:IsA("BodyGyro") or obj:IsA("VectorForce")
                 or obj:IsA("LinearVelocity") or obj:IsA("AngularVelocity") or obj:IsA("AlignPosition")
                 or obj:IsA("AlignOrientation") then
-                    obj:Destroy()
+                    if obj.Parent == root or obj.Parent == char or obj.Parent:IsDescendantOf(char) then
+                        pcall(function() obj:Destroy() end)
+                    end
                 end
             end
+        end)
+    end
+
+    local function findGroundY(fromPos, maxDistance)
+        maxDistance = maxDistance or 20
+        local params = RaycastParams.new()
+        params.FilterDescendantsInstances = {player.Character}
+        params.FilterType = Enum.RaycastFilterType.Blacklist
+        params.IgnoreWater = true
+        local result = Workspace:Raycast(fromPos, Vector3.new(0, -1, 0) * maxDistance, params)
+        if result and result.Position then
+            return result.Position.Y, result
+        end
+        return nil, nil
+    end
+
+    local function restoreAfterAntiFling()
+        pcall(function()
+            local char = player.Character
+            if not char then return end
+
+            if next(savedCanCollide) then
+                for part, original in pairs(savedCanCollide) do
+                    if part and part.Parent then
+                        pcall(function() part.CanCollide = original end)
+                    end
+                end
+            else
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") and not part.Anchored then
+                        pcall(function() part.CanCollide = true end)
+                    end
+                end
+            end
+
+            task.wait(0.06)
+
+            local root = char:FindFirstChild("HumanoidRootPart")
+            local hum = char:FindFirstChildOfClass("Humanoid")
+
+            if root then
+                pcall(function()
+                    local ok, av = pcall(function() return root.AssemblyLinearVelocity end)
+                    if ok and av then
+                        root.AssemblyLinearVelocity = Vector3.new(0, math.clamp(av.Y, -50, 50), 0)
+                    else
+                        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                    end
+                    root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                    root.RotVelocity = Vector3.new(0,0,0)
+                end)
+            end
+
+            if hum then
+                pcall(function() hum.PlatformStand = false end)
+                hum.Sit = false
+                hum.AutoRotate = true
+
+                if originalHipHeight ~= nil then
+                    pcall(function() hum.HipHeight = originalHipHeight end)
+                    originalHipHeight = nil
+                end
+
+                if root and root:IsA("BasePart") then
+                    local groundY = nil
+                    local tries = 0
+                    while tries < 3 and not groundY do
+                        local y, _ = findGroundY(root.Position + Vector3.new(0, 1.5, 0), 20)
+                        groundY = y
+                        tries = tries + 1
+                        if not groundY then task.wait(0.03) end
+                    end
+
+                    if groundY then
+                        local offset = 2
+                        if hum and type(hum.HipHeight) == "number" then
+                            offset = hum.HipHeight + 0.5
+                        else
+                            offset = (root.Size.Y / 2) + 0.5
+                        end
+                        local desiredY = groundY + offset
+                        local dy = root.Position.Y - desiredY
+                        if math.abs(dy) > 0.12 then
+                            pcall(function() root:SetNetworkOwner(player) end)
+                            root.CFrame = CFrame.new(root.Position.X, desiredY, root.Position.Z, root.CFrame:ToOrientation())
+                        end
+                    end
+                end
+
+                pcall(function()
+                    hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+                end)
+                task.wait(0.06)
+                pcall(function()
+                    hum:ChangeState(Enum.HumanoidStateType.Running)
+                end)
+            end
+
+            pcall(function()
+                local cam = Workspace.CurrentCamera
+                if cam and player.Character then
+                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        cam.CameraSubject = hum
+                        cam.CameraType = Enum.CameraType.Custom
+                    end
+                end
+            end)
         end)
     end
 
@@ -677,15 +789,20 @@ task.spawn(function()
                 local root = char:FindFirstChild("HumanoidRootPart")
                 if not root then return end
 
-                if root.AssemblyAngularVelocity.Magnitude > ANGULAR_SPEED_LIMIT then
-                    root.AssemblyAngularVelocity = Vector3.new(0,0,0)
+                local ok, av = pcall(function() return root.AssemblyLinearVelocity end)
+                if ok and av and av.Magnitude > 40 then
+                    root.AssemblyLinearVelocity = Vector3.new(0, math.clamp(av.Y, -50, 50), 0)
                 end
-                if root.AssemblyLinearVelocity.Magnitude > 40 then
-                    root.AssemblyLinearVelocity = Vector3.new(0, math.clamp(root.AssemblyLinearVelocity.Y, -50, 50), 0)
+                local ok2, aa = pcall(function() return root.AssemblyAngularVelocity end)
+                if ok2 and aa and aa.Magnitude > ANGULAR_SPEED_LIMIT then
+                    root.AssemblyAngularVelocity = Vector3.new(0,0,0)
                 end
 
                 for _, part in ipairs(char:GetDescendants()) do
                     if part:IsA("BasePart") and not part.Anchored then
+                        if savedCanCollide[part] == nil then
+                            savedCanCollide[part] = part.CanCollide
+                        end
                         part.CanCollide = false
                     end
                 end
@@ -700,12 +817,10 @@ task.spawn(function()
         end
     end
 
-    -- UPDATED noclip functions (R15-friendly)
     local function enableNoclip()
         if not onlyOwner() then return end
         if noclipConn then noclipConn:Disconnect() end
 
-        -- reset saved table
         savedCanCollide = {}
         originalHipHeight = nil
 
@@ -713,16 +828,13 @@ task.spawn(function()
             pcall(function()
                 local char = player.Character
                 if char then
-                    -- cache humanoid hip height once
                     local hum = char:FindFirstChildOfClass("Humanoid")
                     if hum and originalHipHeight == nil then
-                        -- store original HipHeight if available
                         pcall(function() originalHipHeight = hum.HipHeight end)
                     end
 
                     for _, part in ipairs(char:GetDescendants()) do
                         if part:IsA("BasePart") and not part.Anchored then
-                            -- save original CanCollide only once per part
                             if savedCanCollide[part] == nil then
                                 savedCanCollide[part] = part.CanCollide
                             end
@@ -745,59 +857,48 @@ task.spawn(function()
         pcall(function()
             local char = player.Character
             if not char then
-                -- clear saved table to avoid memory leak
                 savedCanCollide = {}
                 originalHipHeight = nil
                 return
             end
 
-            -- Restore saved CanCollide states first
             for part, original in pairs(savedCanCollide) do
                 if part and part.Parent then
-                    -- restore only if the part still exists
                     pcall(function()
                         part.CanCollide = original
                     end)
                 end
             end
-            -- clear saved table
             savedCanCollide = {}
 
-            -- Small delay to let physics settle after restoring collisions
             task.wait(0.06)
 
             local root = char:FindFirstChild("HumanoidRootPart")
             local hum = char:FindFirstChildOfClass("Humanoid")
 
-            -- Avoid hard zeroing velocities; gently clamp vertical velocity to avoid snap
             if root then
                 pcall(function()
                     local ok, av = pcall(function() return root.AssemblyLinearVelocity end)
                     if ok and av then
-                        -- keep horizontal velocity zeroed but preserve reasonable Y to avoid teleport snap
                         root.AssemblyLinearVelocity = Vector3.new(0, math.clamp(av.Y, -50, 50), 0)
                     else
                         root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                     end
                     root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-                    -- do not forcibly set Velocity/RoTVelocity to zero; let physics settle
+                    root.RotVelocity = Vector3.new(0,0,0)
                 end)
             end
 
             if hum then
-                -- restore HipHeight if we saved it (helps R15 return to ground)
                 if originalHipHeight ~= nil then
                     pcall(function() hum.HipHeight = originalHipHeight end)
                     originalHipHeight = nil
                 end
 
-                -- ensure humanoid is not stuck in PlatformStand and let it recover naturally
                 pcall(function() hum.PlatformStand = false end)
                 hum.Sit = false
                 hum.AutoRotate = true
 
-                -- Use a short, gentle state sequence to let the engine re-evaluate collisions
-                -- Prefer GettingUp -> Running for R15; avoid Physics which can cause odd snaps
                 pcall(function()
                     hum:ChangeState(Enum.HumanoidStateType.GettingUp)
                 end)
@@ -1112,8 +1213,10 @@ task.spawn(function()
         end)
     end
 
-    local DETECTION_THRESHOLD = 24
-    local DECAY_PER_SECOND    = 4.5
+    -- Detector refinado
+    local DETECTION_THRESHOLD = 48
+    local DECAY_PER_SECOND    = 6
+    local SUSTAINED_TOOL_TIME = 0.9
 
     local playerData = {}
 
@@ -1136,7 +1239,9 @@ task.spawn(function()
             lastToolAttack = nil,
             lastUpdate     = tick(),
             lastGuiCheck   = 0,
-            mildSpeedStreak = 0
+            mildSpeedStreak = 0,
+            flyToolDetectedSince = 0,
+            flyToolCount = 0
         }
     end
 
@@ -1147,7 +1252,7 @@ task.spawn(function()
         local tpCountThisFrame = 0
         local recentTps = {}
 
-        for _, plr in Players:GetPlayers() do
+        for _, plr in ipairs(Players:GetPlayers()) do
             if plr == player then continue end
 
             local char = plr.Character
@@ -1168,7 +1273,43 @@ task.spawn(function()
             data.score = math.max(0, data.score - DECAY_PER_SECOND * deltaT)
 
             local violated = false
-            local reasons = {}   -- <<< CORRIGIDO (era [] antes)
+            local reasons = {}
+
+            local flyToolCount = 0
+            for _, obj in ipairs(char:GetDescendants()) do
+                if obj:IsA("BodyGyro") or obj:IsA("BodyVelocity") or obj:IsA("BodyForce")
+                or obj:IsA("LinearVelocity") or obj:IsA("AngularVelocity")
+                or obj:IsA("AlignPosition") or obj:IsA("AlignOrientation") or obj:IsA("VectorForce") then
+                    local parentName = obj.Parent and obj.Parent.Name or ""
+                    if parentName:lower():find("safe") or parentName:lower():find("vehicle") then
+                    else
+                        flyToolCount = flyToolCount + 1
+                    end
+                end
+            end
+
+            if flyToolCount > 0 then
+                if data.flyToolDetectedSince == 0 then
+                    data.flyToolDetectedSince = now
+                    data.flyToolCount = flyToolCount
+                else
+                    if flyToolCount ~= data.flyToolCount then
+                        data.flyToolDetectedSince = now
+                        data.flyToolCount = flyToolCount
+                    end
+                end
+            else
+                data.flyToolDetectedSince = 0
+                data.flyToolCount = 0
+            end
+
+            local sustainedFlyTool = (data.flyToolDetectedSince > 0 and (now - data.flyToolDetectedSince) >= SUSTAINED_TOOL_TIME)
+
+            if sustainedFlyTool then
+                table.insert(reasons, "Fly tool sustentado detectado")
+                data.score = data.score + 22
+                violated = true
+            end
 
             if hum:GetState() == Enum.HumanoidStateType.Dead
             or hum:GetState() == Enum.HumanoidStateType.Ragdoll
@@ -1181,7 +1322,7 @@ task.spawn(function()
 
             if hum:GetState() == Enum.HumanoidStateType.Freefall
             or hum:GetState() == Enum.HumanoidStateType.Jumping then
-                data.airTime += deltaT
+                data.airTime = data.airTime + deltaT
             else
                 data.airTime = 0
             end
@@ -1196,9 +1337,9 @@ task.spawn(function()
                     recentTps[plr] = true
                     tpCountThisFrame = tpCountThisFrame + 1
                     data.tpStreak = data.tpStreak + 1
-                    if data.tpStreak >= 3 then
+                    if data.tpStreak >= 4 then
                         table.insert(reasons, "Teleporte repetido")
-                        data.score += 25
+                        data.score = data.score + 20
                         violated = true
                     end
                 else
@@ -1215,14 +1356,14 @@ task.spawn(function()
             table.insert(data.horizMedium, hSpeed)
             if #data.horizMedium > 150 then table.remove(data.horizMedium,1) end
 
-            local avgShort   = 0; for _,v in data.horizShort   do avgShort   += v end; avgShort   /= math.max(1,#data.horizShort)
-            local avgMedium  = 0; for _,v in data.horizMedium  do avgMedium  += v end; avgMedium  /= math.max(1,#data.horizMedium)
+            local avgShort   = 0; for _,v in ipairs(data.horizShort)   do avgShort   = avgShort + v end; avgShort   = avgShort / math.max(1,#data.horizShort)
+            local avgMedium  = 0; for _,v in ipairs(data.horizMedium)  do avgMedium  = avgMedium + v end; avgMedium  = avgMedium / math.max(1,#data.horizMedium)
 
-            if avgShort > expMax * 1.7 then
-                data.speedStreak += 1
-                if data.speedStreak >= 5 then
+            if avgShort > expMax * 1.9 then
+                data.speedStreak = data.speedStreak + 1
+                if data.speedStreak >= 6 then
                     table.insert(reasons, "Velocidade horizontal alta sustentada")
-                    data.score += 12
+                    data.score = data.score + 10
                     violated = true
                 end
             else
@@ -1230,17 +1371,23 @@ task.spawn(function()
             end
 
             local vAbs = math.abs(vel.Y)
-            if data.airTime > 3.0 then
-                if vAbs < 14 then
-                    data.flyStreak += 1
-                    if data.flyStreak >= 6 then
+            if data.airTime > 2.6 then
+                if vAbs < 9 then
+                    data.flyStreak = data.flyStreak + 1
+                    if data.flyStreak >= 8 or sustainedFlyTool then
                         table.insert(reasons, "Fly / levitação prolongada")
-                        data.score += 15
+                        data.score = data.score + 16
                         violated = true
                     end
                 elseif vel.Y > 48 and data.airTime < 1.6 then
                     table.insert(reasons, "Subida vertical anormal")
-                    data.score += 13
+                    data.score = data.score + 12
+                    violated = true
+                end
+            else
+                if sustainedFlyTool and vAbs > 1 then
+                    table.insert(reasons, "Fly tool detectado com movimento anômalo")
+                    data.score = data.score + 10
                     violated = true
                 end
             end
@@ -1249,20 +1396,20 @@ task.spawn(function()
             table.insert(data.angHistory, angMag)
             if #data.angHistory > 15 then table.remove(data.angHistory,1) end
 
-            local avgAng = 0; for _,v in data.angHistory do avgAng += v end; avgAng /= math.max(1,#data.angHistory)
+            local avgAng = 0; for _,v in ipairs(data.angHistory) do avgAng = avgAng + v end; avgAng = avgAng / math.max(1,#data.angHistory)
 
-            if avgAng > 105 or angMag > 160 then
+            if avgAng > 140 or angMag > 220 then
                 table.insert(reasons, "Rotação angular extrema")
-                data.score += 17
+                data.score = data.score + 14
                 violated = true
             end
 
             if data.lastHealth then
-                if hum.Health > data.lastHealth + 8 then
-                    data.godStreak += 1
-                    if data.godStreak >= 3 then
+                if hum.Health > data.lastHealth + 10 then
+                    data.godStreak = data.godStreak + 1
+                    if data.godStreak >= 4 then
                         table.insert(reasons, "Regeneração / godmode suspeito")
-                        data.score += 16
+                        data.score = data.score + 14
                         violated = true
                     end
                 end
@@ -1272,10 +1419,10 @@ task.spawn(function()
             if data.lastAng then
                 local dAng = (ang - data.lastAng).Magnitude
                 if dAng > 160 and hSpeed > 18 then
-                    data.aimSnapStreak += 1
-                    if data.aimSnapStreak >= 4 then
+                    data.aimSnapStreak = data.aimSnapStreak + 1
+                    if data.aimSnapStreak >= 5 then
                         table.insert(reasons, "Aim snap / rotação suspeita")
-                        data.score += 13
+                        data.score = data.score + 10
                         violated = true
                     end
                 else
@@ -1284,12 +1431,12 @@ task.spawn(function()
             end
             data.lastAng = ang
 
-            if now - (data.lastGuiCheck or 0) > 2.5 then
+            if now - (data.lastGuiCheck or 0) > 3.5 then
                 data.lastGuiCheck = now
                 local guiName = detectSuspiciousGUI(plr)
                 if guiName then
                     table.insert(reasons, "GUI de Executor: " .. guiName)
-                    data.score += 80
+                    data.score = data.score + 90
                     violated = true
                 end
             end
@@ -1297,9 +1444,9 @@ task.spawn(function()
             local currentWS = hum.WalkSpeed or 16
             if currentWS > 18 then
                 data.mildSpeedStreak = (data.mildSpeedStreak or 0) + 1
-                if data.mildSpeedStreak >= 20 then
+                if data.mildSpeedStreak >= 30 then
                     table.insert(reasons, "WalkSpeed sutil aumentado (speed hack)")
-                    data.score += 12
+                    data.score = data.score + 10
                     violated = true
                 end
             else
@@ -1309,14 +1456,14 @@ task.spawn(function()
             local head = char:FindFirstChild("Head")
             if head and head.Transparency > 0.75 and hSpeed > 8 then
                 table.insert(reasons, "Invisibilidade suspeita (cabeça)")
-                data.score += 22
+                data.score = data.score + 18
                 violated = true
             end
 
             if violated and data.score >= DETECTION_THRESHOLD then
                 local msg = table.concat(reasons, " + ") .. "  (score: " .. math.floor(data.score) .. ")"
                 markSuspect(plr, msg)
-                data.score = math.max(0, data.score - 16)
+                data.score = math.max(0, data.score - 20)
             end
 
             data.lastPos = pos
@@ -1355,6 +1502,7 @@ task.spawn(function()
         end
     end)
 
+    -- FLY implementation (mantive)
     local cam = workspace.CurrentCamera
 
     local SPRINT_MULT = 1.6
@@ -1690,7 +1838,7 @@ task.spawn(function()
             local horiz = Vector3.new(md.X, 0, md.Z)
             if horiz.Magnitude > 0 then horiz = horiz.Unit else horiz = Vector3.new(0,0,0) end
 
-            local speed = math.clamp(tonumber(savedWalkSpeed) or 0, 0, WALK_SPEED_LIMIT)
+            local speed = math.max(tonumber(savedWalkSpeed) or 0, 0)
 
             local desiredVel = Vector3.new(horiz.X * speed, currentY, horiz.Z * speed)
 
@@ -1732,7 +1880,7 @@ task.spawn(function()
                 end
                 local hum = char:FindFirstChildOfClass("Humanoid")
                 if hum then
-                    hum.WalkSpeed = math.clamp(savedWalkSpeed, 0, WALK_SPEED_LIMIT)
+                    hum.WalkSpeed = math.max(savedWalkSpeed, 0)
                     hum.PlatformStand = false
                     hum.Sit = false
                     hum.AutoRotate = true
@@ -1742,6 +1890,7 @@ task.spawn(function()
         end)
     end
 
+    local antiRubberConn = nil
     local function startAntiRubberband()
         if antiRubberConn then return end
         antiRubberConn = RunService.Stepped:Connect(function()
@@ -1780,6 +1929,7 @@ task.spawn(function()
         end
     end
 
+    local camForceConn = nil
     local function enableCamBypass()
         if not onlyOwner() then return end
         if camBypassConn then camBypassConn:Disconnect() end
@@ -1791,15 +1941,37 @@ task.spawn(function()
             pcall(function()
                 local camera = workspace.CurrentCamera
                 if camera then
-                    camera.CameraType = Enum.CameraType.Custom
+                    if camera.CameraType ~= Enum.CameraType.Custom then
+                        camera.CameraType = Enum.CameraType.Custom
+                    end
+                    local char = player.Character
+                    if char then
+                        local hum = char:FindFirstChildOfClass("Humanoid")
+                        if hum and camera.CameraSubject ~= hum then
+                            camera.CameraSubject = hum
+                        end
+                    end
                 end
                 if player then
-                    player.CameraMaxZoomDistance = 10000
-                    player.CameraMinZoomDistance = 0.5
-                    player.CameraMode = Enum.CameraMode.Classic
+                    if player.CameraMaxZoomDistance ~= 10000 then player.CameraMaxZoomDistance = 10000 end
+                    if player.CameraMinZoomDistance ~= 0.5 then player.CameraMinZoomDistance = 0.5 end
+                    if player.CameraMode ~= Enum.CameraMode.Classic then player.CameraMode = Enum.CameraMode.Classic end
                 end
             end)
         end)
+
+        if workspace.CurrentCamera then
+            if camForceConn then camForceConn:Disconnect() end
+            camForceConn = workspace.CurrentCamera:GetPropertyChangedSignal("CameraSubject"):Connect(function()
+                pcall(function()
+                    local camera = workspace.CurrentCamera
+                    if camera and player and player.Character then
+                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                        if hum then camera.CameraSubject = hum end
+                    end
+                end)
+            end)
+        end
     end
 
     local function disableCamBypass()
@@ -1807,14 +1979,29 @@ task.spawn(function()
             camBypassConn:Disconnect()
             camBypassConn = nil
         end
+        if camForceConn then
+            camForceConn:Disconnect()
+            camForceConn = nil
+        end
         pcall(function()
             if player then
                 player.CameraMaxZoomDistance = originalCameraMaxZoom
                 player.CameraMinZoomDistance = originalCameraMinZoom
             end
+            local camera = workspace.CurrentCamera
+            if camera then
+                if player.Character then
+                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        camera.CameraSubject = hum
+                    end
+                end
+                camera.CameraType = Enum.CameraType.Custom
+            end
         end)
     end
 
+    -- Dragging main button
     local dragging = false
     local dragStart = Vector2.new()
     local startPos = UDim2.new()
@@ -1884,6 +2071,7 @@ task.spawn(function()
         if not onlyOwner() then return end
         antiFlingActive = not antiFlingActive
         if antiFlingActive then
+            updateAntiFling()
             startAntiFlingEnforcer()
             antiFlingBtn.Text = "ANTI-FLING ON"
             antiFlingBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
@@ -1892,6 +2080,7 @@ task.spawn(function()
             antiFlingBtn.Text = "ANTI-FLING OFF"
             antiFlingBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
             updateAntiFling()
+            restoreAfterAntiFling()
         end
     end)
 
@@ -1956,13 +2145,14 @@ task.spawn(function()
     applyBtn.MouseButton1Click:Connect(function()
         if not onlyOwner() then return end
         local valWS = tonumber(wsBox.Text) or savedWalkSpeed
-        valWS = math.clamp(valWS, 0, WALK_SPEED_LIMIT)
+        -- removed upper limit clamp; only ensure non-negative
+        valWS = math.max(valWS, 0)
         savedWalkSpeed = valWS
         player:SetAttribute("SavedWalkSpeed", savedWalkSpeed)
         FLIGHT_BASE_SPEED = math.clamp(savedWalkSpeed * 5, 10, 1000)
 
         local valJH = tonumber(jhBox.Text) or savedJumpHeight
-        valJH = math.clamp(valJH, 0, JUMP_HEIGHT_LIMIT)
+        valJH = math.max(valJH, 0)
         savedJumpHeight = valJH
         player:SetAttribute("SavedJumpHeight", savedJumpHeight)
 
