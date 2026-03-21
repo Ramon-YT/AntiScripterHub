@@ -1,28 +1,23 @@
--- AntiScripter (versão final: cam bypass com override imediato e restauração de cutscenes)
--- Funcionalidades:
--- - Anti-fling robusto para R15 (salva/restaura CanCollide, reposiciona no chão)
--- - Detector refinado (reduz falsos positivos)
--- - Cam bypass que força imediatamente a câmera para o jogador quando ativo,
---   e restaura exatamente o estado anterior (incluindo cutscenes Scriptable) ao desativar.
--- Cole este script como LocalScript em StarterPlayerScripts ou PlayerScripts.
-
 task.spawn(function()
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
     local UserInputService = game:GetService("UserInputService")
     local Workspace = workspace
+    local PhysicsService = game:GetService("PhysicsService")
 
     local player = Players.LocalPlayer
     if not player then
         repeat task.wait() player = Players.LocalPlayer until player
     end
 
-    local playerGui = player:WaitForChild("PlayerGui", 10)
+    -- Wait indefinitely for PlayerGui (fix: removed timeout so GUI always attaches when ready)
+    local playerGui = player:WaitForChild("PlayerGui")
     if not playerGui then return end
 
     local OWNER_USERID = player.UserId
     local PLACE_KEY = tostring(game.PlaceId)
     local GUI_NAME = "AntiScripterGUI_" .. tostring(OWNER_USERID)
+    local COLLISION_GROUP_NAME = "AntiScripterNoCollide"
 
     local function onlyOwner()
         return Players.LocalPlayer and Players.LocalPlayer.UserId == OWNER_USERID
@@ -32,6 +27,41 @@ task.spawn(function()
     local existingGui = playerGui:FindFirstChild(GUI_NAME)
     if existingGui then
         return
+    end
+
+    -- Ensure collision group exists and is configured
+    local function ensureCollisionGroup()
+        pcall(function()
+            local ok, groups = pcall(function() return PhysicsService:GetCollisionGroups() end)
+            local found = false
+            if ok and groups then
+                for _, g in ipairs(groups) do
+                    if g.name == COLLISION_GROUP_NAME then
+                        found = true
+                        break
+                    end
+                end
+            end
+            if not found then
+                pcall(function() PhysicsService:CreateCollisionGroup(COLLISION_GROUP_NAME) end)
+            end
+            pcall(function() PhysicsService:CollisionGroupSetCollidable(COLLISION_GROUP_NAME, "Default", false) end)
+            pcall(function() PhysicsService:CollisionGroupSetCollidable(COLLISION_GROUP_NAME, "Terrain", false) end)
+        end)
+    end
+
+    local function setPartCollisionGroupSafe(part, groupName)
+        if not part or not part:IsA("BasePart") then return end
+        pcall(function()
+            PhysicsService:SetPartCollisionGroup(part, groupName)
+        end)
+    end
+
+    local function restorePartCollisionGroupSafe(part)
+        if not part or not part:IsA("BasePart") then return end
+        pcall(function()
+            PhysicsService:SetPartCollisionGroup(part, "Default")
+        end)
     end
 
     local gui = Instance.new("ScreenGui")
@@ -399,105 +429,33 @@ task.spawn(function()
     -- New: saved camera state for restoration when disabling cam bypass
     local savedCameraState = nil
 
-    -- Helper: safely get current camera
-    local function getCurrentCamera()
-        local ok, cam = pcall(function() return Workspace.CurrentCamera end)
-        if ok then return cam end
-        return nil
-    end
+    -- Store parts that had their collision group changed so we can restore them
+    local partsWithCollisionGroupChanged = {}
 
-    -- Aggressive attach: when camera instance changes, reattach listeners
-    local function attachCameraListeners(camera)
-        if not camera then return end
-
-        -- Disconnect previous camera property listeners if any
-        if camForceConn then camForceConn:Disconnect(); camForceConn = nil end
-        if camTypeConn then camTypeConn:Disconnect(); camTypeConn = nil end
-        if camCFrameConn then camCFrameConn:Disconnect(); camCFrameConn = nil end
-
-        -- Immediate override on any property change: CameraSubject, CameraType, CFrame
-        camForceConn = camera:GetPropertyChangedSignal("CameraSubject"):Connect(function()
-            pcall(function()
-                if not camBypassActive then return end
-                local camNow = getCurrentCamera()
-                if not camNow then return end
-                if player and player.Character then
-                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
-                    if hum and camNow.CameraSubject ~= hum then
-                        camNow.CameraSubject = hum
-                    end
-                end
-            end)
-        end)
-
-        camTypeConn = camera:GetPropertyChangedSignal("CameraType"):Connect(function()
-            pcall(function()
-                if not camBypassActive then return end
-                local camNow = getCurrentCamera()
-                if not camNow then return end
-                if camNow.CameraType ~= Enum.CameraType.Custom then
-                    camNow.CameraType = Enum.CameraType.Custom
-                end
-            end)
-        end)
-
-        -- Some games set Camera.CFrame directly (scriptable cutscenes). When bypass is active,
-        -- we do not continuously override CFrame (so player can look around), but we must immediately
-        -- reapply CameraSubject so control returns to player. Listen for CFrame changes and reapply subject/type.
-        camCFrameConn = camera:GetPropertyChangedSignal("CFrame"):Connect(function()
-            pcall(function()
-                if not camBypassActive then return end
-                local camNow = getCurrentCamera()
-                if not camNow then return end
-                if player and player.Character then
-                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
-                    if hum and camNow.CameraSubject ~= hum then
-                        camNow.CameraSubject = hum
-                    end
-                    if camNow.CameraType ~= Enum.CameraType.Custom then
-                        camNow.CameraType = Enum.CameraType.Custom
-                    end
-                end
-            end)
-        end)
-
-        -- Also listen to Changed event for immediate reaction to any other modifications
-        camera.Changed:Connect(function(prop)
-            pcall(function()
-                if not camBypassActive then return end
-                local camNow = getCurrentCamera()
-                if not camNow then return end
-                if player and player.Character then
-                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
-                    if hum then
-                        if camNow.CameraSubject ~= hum then camNow.CameraSubject = hum end
-                        if camNow.CameraType ~= Enum.CameraType.Custom then camNow.CameraType = Enum.CameraType.Custom end
-                    end
-                end
-            end)
-        end)
-    end
-
-    -- When workspace.CurrentCamera changes, reattach listeners and immediately enforce
-    local function attachCurrentCameraWatcher()
-        if camCurrentCameraConn then camCurrentCameraConn:Disconnect(); camCurrentCameraConn = nil end
-        camCurrentCameraConn = Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-            pcall(function()
-                local camNow = getCurrentCamera()
-                if camNow and camBypassActive then
-                    attachCameraListeners(camNow)
-                    -- immediate enforcement
-                    if player and player.Character then
-                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
-                        if hum then
-                            camNow.CameraSubject = hum
-                            camNow.CameraType = Enum.CameraType.Custom
-                        end
-                    end
-                end
-            end)
-        end)
-    end
+    -- Noclip helpers for robust behavior
+    local lastGoodCFrame = nil
+    local lastDesiredCFrame = nil
+    local noclipEnforceAttempts = 0
+    local NOC_CLIP_REAPPLY_ATTEMPTS = 12 -- AUMENTADO para combater teleports de paredes invisíveis
+    local NOC_CLIP_REAPPLY_INTERVAL = 0.03 -- MENOR para reaplicação mais rápida
+    local NOC_CLIP_OVERLAP_BOX_PADDING = Vector3.new(1, 1, 1) -- AUMENTADO para detectar antes
+    local NOC_CLIP_ESCAPE_OFFSETS = {
+        Vector3.new(0, 1.5, 0),
+        Vector3.new(0, 2.5, 0),
+        Vector3.new(0, 3.5, 0),
+        Vector3.new(0, -1.5, 0),
+        Vector3.new(0, -2.5, 0),
+        Vector3.new(1.5, 0, 0),
+        Vector3.new(-1.5, 0, 0),
+        Vector3.new(0, 0, 1.5),
+        Vector3.new(0, 0, -1.5),
+        Vector3.new(2.5, 0, 0),
+        Vector3.new(-2.5, 0, 0),
+        Vector3.new(0, 0, 2.5),
+        Vector3.new(0, 0, -2.5),
+        Vector3.new(0.5, 0, 0), Vector3.new(-0.5, 0, 0), -- extras pequenos
+        Vector3.new(0, 0.5, 0), Vector3.new(0, -0.5, 0),
+    }
 
     local function maintainNetworkOwnership()
         if ownershipConn then ownershipConn:Disconnect() end
@@ -558,6 +516,21 @@ task.spawn(function()
             end
         end
         return nil
+    end
+
+    local function applyToHumanoid(hum)
+        if not hum then return end
+        pcall(function()
+            if type(savedWalkSpeed) == "number" and savedWalkSpeed >= 0 then
+                hum.WalkSpeed = savedWalkSpeed
+            end
+            if type(savedJumpHeight) == "number" and savedJumpHeight >= 0 then
+                local gravity = Workspace.Gravity or 196.2
+                local jumpPower = math.sqrt(math.max(savedJumpHeight, 0) * 2 * gravity)
+                hum.JumpPower = jumpPower
+                pcall(function() hum.JumpHeight = savedJumpHeight end)
+            end
+        end)
     end
 
     local function enforceMovementOnHumanoid(hum)
@@ -734,9 +707,6 @@ task.spawn(function()
         return savedWalkSpeed, savedJumpHeight
     end
 
-    local flingOffenders = {}
-    local launchedPlayers = {}
-
     local function updateAntiFling()
         if not onlyOwner() then return end
         pcall(function()
@@ -906,30 +876,181 @@ task.spawn(function()
         end
     end
 
+    -- Utility: check overlap around a CFrame using GetPartBoundsInBox
+    local function partsOverlappingAt(cframe, size, ignoreList)
+        local ok, parts = pcall(function()
+            return Workspace:GetPartBoundsInBox(cframe, size)
+        end)
+        if not ok or not parts then return {} end
+        local filtered = {}
+        for _, p in ipairs(parts) do
+            if p and p.Parent and (not table.find(ignoreList, p)) then
+                table.insert(filtered, p)
+            end
+        end
+        return filtered
+    end
+
+    -- Find a nearby non-overlapping CFrame for the root by trying offsets
+    local function findEscapeCFrame(root)
+        if not root or not root:IsA("BasePart") then return nil end
+        local baseCFrame = root.CFrame
+        local size = root.Size + NOC_CLIP_OVERLAP_BOX_PADDING
+        local ignoreList = {}
+        if player.Character then
+            for _, part in ipairs(player.Character:GetDescendants()) do
+                if part:IsA("BasePart") then table.insert(ignoreList, part) end
+            end
+        end
+
+        -- If current position is already free, return it
+        local overlaps = partsOverlappingAt(baseCFrame, size, ignoreList)
+        if #overlaps == 0 then
+            return baseCFrame
+        end
+
+        -- Try offsets
+        for _, offset in ipairs(NOC_CLIP_ESCAPE_OFFSETS) do
+            local candidate = baseCFrame + offset
+            local overlaps2 = partsOverlappingAt(candidate, size, ignoreList)
+            if #overlaps2 == 0 then
+                return candidate
+            end
+        end
+
+        -- Try expanding radius
+        for r = 1, 5 do
+            for _, dir in ipairs({
+                Vector3.new(r, 0, 0), Vector3.new(-r, 0, 0),
+                Vector3.new(0, r, 0), Vector3.new(0, -r, 0),
+                Vector3.new(0, 0, r), Vector3.new(0, 0, -r),
+            }) do
+                local candidate = baseCFrame + dir
+                local overlaps2 = partsOverlappingAt(candidate, size, ignoreList)
+                if #overlaps2 == 0 then
+                    return candidate
+                end
+            end
+        end
+
+        return nil
+    end
+
+    -- Noclip with collision group handling and robust anti-teleport strategy (FIX: velocity zero + mais reaplicações)
     local function enableNoclip()
         if not onlyOwner() then return end
         if noclipConn then noclipConn:Disconnect() end
 
+        ensureCollisionGroup()
+        partsWithCollisionGroupChanged = {}
         savedCanCollide = {}
         originalHipHeight = nil
+        lastGoodCFrame = nil
+        lastDesiredCFrame = nil
+        noclipEnforceAttempts = 0
 
         noclipConn = RunService.Stepped:Connect(function()
             pcall(function()
                 local char = player.Character
-                if char then
-                    local hum = char:FindFirstChildOfClass("Humanoid")
-                    if hum and originalHipHeight == nil then
-                        pcall(function() originalHipHeight = hum.HipHeight end)
-                    end
+                if not char then return end
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                local root = char:FindFirstChild("HumanoidRootPart")
+                if hum and originalHipHeight == nil then
+                    pcall(function() originalHipHeight = hum.HipHeight end)
+                end
+                if not root then return end
 
-                    for _, part in ipairs(char:GetDescendants()) do
-                        if part:IsA("BasePart") and not part.Anchored then
-                            if savedCanCollide[part] == nil then
-                                savedCanCollide[part] = part.CanCollide
+                -- Ensure parts are non-collidable and in our collision group
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") and not part.Anchored then
+                        if savedCanCollide[part] == nil then
+                            savedCanCollide[part] = part.CanCollide
+                        end
+                        part.CanCollide = false
+                        if not partsWithCollisionGroupChanged[part] then
+                            partsWithCollisionGroupChanged[part] = true
+                        end
+                        setPartCollisionGroupSafe(part, COLLISION_GROUP_NAME)
+                    end
+                end
+
+                -- Maintain network ownership aggressively
+                pcall(function() root:SetNetworkOwner(player) end)
+
+                -- Track last good position (where we were not overlapping)
+                local overlaps = partsOverlappingAt(root.CFrame, root.Size + NOC_CLIP_OVERLAP_BOX_PADDING, (function()
+                    local ig = {}
+                    for _, p in ipairs(char:GetDescendants()) do if p:IsA("BasePart") then table.insert(ig, p) end end
+                    return ig
+                end)())
+
+                if #overlaps == 0 then
+                    lastGoodCFrame = root.CFrame
+                else
+                    -- We're overlapping something (inside wall). Try to find escape spot.
+                    local escape = findEscapeCFrame(root)
+                    if escape then
+                        -- Try to move to escape position and reapply network ownership multiple times
+                        for i = 1, NOC_CLIP_REAPPLY_ATTEMPTS do
+                            pcall(function()
+                                root:SetNetworkOwner(player)
+                                root.CFrame = escape
+                                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0) -- FIX: zera velocity para impedir teleport de parede invisível
+                                root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                                root.RotVelocity = Vector3.new(0, 0, 0)
+                            end)
+                            task.wait(NOC_CLIP_REAPPLY_INTERVAL)
+                        end
+                        lastGoodCFrame = root.CFrame
+                    else
+                        -- No escape found; if we have a last good position, try to reapply it
+                        if lastGoodCFrame then
+                            for i = 1, NOC_CLIP_REAPPLY_ATTEMPTS do
+                                pcall(function()
+                                    root:SetNetworkOwner(player)
+                                    root.CFrame = lastGoodCFrame
+                                    root.AssemblyLinearVelocity = Vector3.new(0, 0, 0) -- FIX
+                                    root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                                    root.RotVelocity = Vector3.new(0, 0, 0)
+                                end)
+                                task.wait(NOC_CLIP_REAPPLY_INTERVAL)
                             end
-                            part.CanCollide = false
                         end
                     end
+                end
+
+                -- If server teleports us far away from lastDesiredCFrame, attempt to reapply desired
+                if lastDesiredCFrame then
+                    local dist = (root.Position - lastDesiredCFrame.Position).Magnitude
+                    if dist > 3 then
+                        -- server likely teleported us out; try to reapply desired position several times
+                        for i = 1, NOC_CLIP_REAPPLY_ATTEMPTS do
+                            pcall(function()
+                                root:SetNetworkOwner(player)
+                                root.CFrame = lastDesiredCFrame
+                                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0) -- FIX
+                                root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                                root.RotVelocity = Vector3.new(0, 0, 0)
+                            end)
+                            task.wait(NOC_CLIP_REAPPLY_INTERVAL)
+                        end
+                    end
+                end
+
+                -- Update lastDesiredCFrame based on player input / camera direction to keep moving through walls
+                -- If player is moving, set desired slightly ahead so we keep moving through
+                local humMoveDir = hum and hum.MoveDirection or Vector3.new(0,0,0)
+                if humMoveDir.Magnitude > 0.01 then
+                    local cam = Workspace.CurrentCamera
+                    if cam then
+                        local forward = cam.CFrame.LookVector
+                        local desired = root.CFrame + Vector3.new(forward.X, 0, forward.Z).Unit * 1.2
+                        lastDesiredCFrame = desired
+                    else
+                        lastDesiredCFrame = root.CFrame
+                    end
+                else
+                    lastDesiredCFrame = root.CFrame
                 end
             end)
         end)
@@ -948,6 +1069,7 @@ task.spawn(function()
             if not char then
                 savedCanCollide = {}
                 originalHipHeight = nil
+                partsWithCollisionGroupChanged = {}
                 return
             end
 
@@ -959,6 +1081,14 @@ task.spawn(function()
                 end
             end
             savedCanCollide = {}
+
+            -- Restore collision group for parts we changed
+            for part, _ in pairs(partsWithCollisionGroupChanged) do
+                if part and part.Parent then
+                    restorePartCollisionGroupSafe(part)
+                end
+            end
+            partsWithCollisionGroupChanged = {}
 
             task.wait(0.06)
 
@@ -1067,6 +1197,13 @@ task.spawn(function()
             local suspect = head:FindFirstChild("SuspectTag")
             if suspect then suspect:Destroy() end
         end
+        -- NOVO: limpa highlight vermelho de tools
+        for _, child in ipairs(char:GetChildren()) do
+            if child:IsA("Tool") then
+                local hl = child:FindFirstChild("AntiScripterToolHighlight")
+                if hl then hl:Destroy() end
+            end
+        end
     end
 
     local function ensureBillboard(plr)
@@ -1080,7 +1217,7 @@ task.spawn(function()
             bg = Instance.new("BillboardGui")
             bg.Name = "HighlightName"
             bg.Adornee = head
-            bg.Size = UDim2.new(0, 180, 0, 28)
+            bg.Size = UDim2.new(0, 220, 0, 55) -- AUMENTADO para caber distância em 2 linhas
             bg.StudsOffset = Vector3.new(0, 3.2, 0)
             bg.AlwaysOnTop = true
             bg.Parent = head
@@ -1092,11 +1229,13 @@ task.spawn(function()
             label.Size = UDim2.new(1,0,1,0)
             label.BackgroundTransparency = 1
             label.Font = Enum.Font.SourceSansBold
-            label.TextSize = 14
+            label.TextSize = 13
             label.TextColor3 = Color3.fromRGB(0, 255, 0)
+            label.TextWrapped = true
+            label.TextYAlignment = Enum.TextYAlignment.Center
             label.Parent = bg
         end
-
+        -- texto inicial (distância será atualizada no enforcer)
         label.Text = plr.DisplayName and (plr.DisplayName .. " (@" .. plr.Name .. ")") or ("@" .. plr.Name)
     end
 
@@ -1133,6 +1272,33 @@ task.spawn(function()
         end
     end
 
+    -- NOVO: highlight vermelho para tool equipado na mão
+    local function manageToolHighlight(plr)
+        if not plr or not plr.Character then return end
+        local char = plr.Character
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then
+            local hl = tool:FindFirstChild("AntiScripterToolHighlight")
+            if not hl then
+                hl = Instance.new("Highlight")
+                hl.Name = "AntiScripterToolHighlight"
+                hl.FillTransparency = 1
+                hl.OutlineColor = Color3.fromRGB(255, 0, 0)
+                hl.OutlineTransparency = 0
+                hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                hl.Parent = tool
+            end
+        else
+            -- limpa qualquer tool antigo
+            for _, child in ipairs(char:GetChildren()) do
+                if child:IsA("Tool") then
+                    local hl = child:FindFirstChild("AntiScripterToolHighlight")
+                    if hl then hl:Destroy() end
+                end
+            end
+        end
+    end
+
     local function startHighlightEnforcerForPlayer(plr)
         if not plr then return end
         if highlightEnforcerConnections[plr] then return end
@@ -1142,6 +1308,25 @@ task.spawn(function()
             createOrUpdateOurHighlight(plr.Character)
             neutralizeOtherHighlights(plr.Character)
             ensureBillboard(plr)
+            manageToolHighlight(plr) -- NOVO: tool vermelho
+
+            -- NOVO: distância em tempo real abaixo do nome
+            local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            local theirRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+            if myRoot and theirRoot then
+                local dist = (theirRoot.Position - myRoot.Position).Magnitude
+                local head = plr.Character:FindFirstChild("Head")
+                if head then
+                    local bg = head:FindFirstChild("HighlightName")
+                    if bg then
+                        local label = bg:FindFirstChildOfClass("TextLabel")
+                        if label then
+                            local nameText = plr.DisplayName and (plr.DisplayName .. " (@" .. plr.Name .. ")") or ("@" .. plr.Name)
+                            label.Text = nameText .. "\nDist: " .. math.floor(dist + 0.5) .. " metros"
+                        end
+                    end
+                end
+            end
         end)
         highlightEnforcerConnections[plr] = conn
     end
@@ -1220,24 +1405,28 @@ task.spawn(function()
         end
     end
 
+    -- NEW: enable/disable highlights for all players (fix: missing functions that prevented highlight from working)
     local function enableHighlightsForAll()
+        highlightActive = true
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= player then
-                connectHighlightForPlayer(plr)
                 if plr.Character then
                     applyHighlight(plr, true)
                 end
+                connectHighlightForPlayer(plr)
             end
         end
     end
 
     local function disableHighlightsForAll()
+        highlightActive = false
         for _, plr in ipairs(Players:GetPlayers()) do
-            disconnectHighlightForPlayer(plr)
-        end
-        for _, plr in ipairs(Players:GetPlayers()) do
-            if plr.Character then
-                clearHighlightForCharacter(plr.Character)
+            if plr ~= player then
+                stopHighlightEnforcerForPlayer(plr)
+                disconnectHighlightForPlayer(plr)
+                if plr.Character then
+                    clearHighlightForCharacter(plr.Character)
+                end
             end
         end
     end
@@ -2018,6 +2207,96 @@ task.spawn(function()
     end
 
     -- CAM BYPASS (reforçado com override imediato e restauração)
+    local function getCurrentCamera()
+        local ok, cam = pcall(function() return Workspace.CurrentCamera end)
+        if ok then return cam end
+        return nil
+    end
+
+    local function attachCameraListeners(camera)
+        if not camera then return end
+
+        if camForceConn then camForceConn:Disconnect(); camForceConn = nil end
+        if camTypeConn then camTypeConn:Disconnect(); camTypeConn = nil end
+        if camCFrameConn then camCFrameConn:Disconnect(); camCFrameConn = nil end
+
+        camForceConn = camera:GetPropertyChangedSignal("CameraSubject"):Connect(function()
+            pcall(function()
+                if not camBypassActive then return end
+                local camNow = getCurrentCamera()
+                if not camNow then return end
+                if player and player.Character then
+                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                    if hum and camNow.CameraSubject ~= hum then
+                        camNow.CameraSubject = hum
+                    end
+                end
+            end)
+        end)
+
+        camTypeConn = camera:GetPropertyChangedSignal("CameraType"):Connect(function()
+            pcall(function()
+                if not camBypassActive then return end
+                local camNow = getCurrentCamera()
+                if not camNow then return end
+                if camNow.CameraType ~= Enum.CameraType.Custom then
+                    camNow.CameraType = Enum.CameraType.Custom
+                end
+            end)
+        end)
+
+        camCFrameConn = camera:GetPropertyChangedSignal("CFrame"):Connect(function()
+            pcall(function()
+                if not camBypassActive then return end
+                local camNow = getCurrentCamera()
+                if not camNow then return end
+                if player and player.Character then
+                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                    if hum and camNow.CameraSubject ~= hum then
+                        camNow.CameraSubject = hum
+                    end
+                    if camNow.CameraType ~= Enum.CameraType.Custom then
+                        camNow.CameraType = Enum.CameraType.Custom
+                    end
+                end
+            end)
+        end)
+
+        camera.Changed:Connect(function(prop)
+            pcall(function()
+                if not camBypassActive then return end
+                local camNow = getCurrentCamera()
+                if not camNow then return end
+                if player and player.Character then
+                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        if camNow.CameraSubject ~= hum then camNow.CameraSubject = hum end
+                        if camNow.CameraType ~= Enum.CameraType.Custom then camNow.CameraType = Enum.CameraType.Custom end
+                    end
+                end
+            end)
+        end)
+    end
+
+    local function attachCurrentCameraWatcher()
+        if camCurrentCameraConn then camCurrentCameraConn:Disconnect(); camCurrentCameraConn = nil end
+        camCurrentCameraConn = Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+            pcall(function()
+                local camNow = getCurrentCamera()
+                if camNow and camBypassActive then
+                    attachCameraListeners(camNow)
+                    if player and player.Character then
+                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                        if hum then
+                            camNow.CameraSubject = hum
+                            camNow.CameraType = Enum.CameraType.Custom
+                        end
+                    end
+                end
+            end)
+        end)
+    end
+
     local function enableCamBypass()
         if not onlyOwner() then return end
         if camBypassConn then return end
@@ -2028,7 +2307,6 @@ task.spawn(function()
             if not camera then return end
         end
 
-        -- Save original camera state only once (so toggling on/off restores correctly)
         if not savedCameraState then
             savedCameraState = {
                 CameraSubject = camera.CameraSubject,
@@ -2040,7 +2318,6 @@ task.spawn(function()
             }
         end
 
-        -- Immediate enforcement function (called whenever we detect a change)
         local function enforceNow()
             pcall(function()
                 local camNow = getCurrentCamera()
@@ -2048,31 +2325,24 @@ task.spawn(function()
                 if player and player.Character then
                     local hum = player.Character:FindFirstChildOfClass("Humanoid")
                     if hum then
-                        -- immediate reapply
                         camNow.CameraSubject = hum
                         camNow.CameraType = Enum.CameraType.Custom
                     end
                 end
-                -- enforce player zooms/mode
                 if player.CameraMode ~= Enum.CameraMode.Classic then player.CameraMode = Enum.CameraMode.Classic end
                 if player.CameraMaxZoomDistance ~= 10000 then player.CameraMaxZoomDistance = 10000 end
                 if player.CameraMinZoomDistance ~= 0.5 then player.CameraMinZoomDistance = 0.5 end
             end)
         end
 
-        -- RenderStepped enforcer: continuous per-frame enforcement (keeps camera on player)
         camBypassConn = RunService.RenderStepped:Connect(function()
             if not camBypassActive then return end
             enforceNow()
         end)
 
-        -- Attach listeners to current camera to react immediately to any external change
         attachCameraListeners(camera)
-
-        -- Watch for workspace.CurrentCamera replacement and reattach
         attachCurrentCameraWatcher()
 
-        -- Also listen for new Camera instances added to workspace (some games create new Camera objects)
         Workspace.ChildAdded:Connect(function(child)
             if not camBypassActive then return end
             if child and child:IsA("Camera") then
@@ -2086,7 +2356,6 @@ task.spawn(function()
             end
         end)
 
-        -- Immediate enforcement once
         enforceNow()
     end
 
@@ -2115,7 +2384,6 @@ task.spawn(function()
         pcall(function()
             local camera = getCurrentCamera()
             if camera and savedCameraState then
-                -- Restore player zooms and mode first
                 if player then
                     if player.CameraMaxZoomDistance ~= savedCameraState.CameraMaxZoomDistance then
                         player.CameraMaxZoomDistance = savedCameraState.CameraMaxZoomDistance or originalCameraMaxZoom
@@ -2128,7 +2396,6 @@ task.spawn(function()
                     end
                 end
 
-                -- Restore CameraType and CameraSubject
                 if savedCameraState.CameraType then
                     camera.CameraType = savedCameraState.CameraType
                 end
@@ -2136,12 +2403,10 @@ task.spawn(function()
                     camera.CameraSubject = savedCameraState.CameraSubject
                 end
 
-                -- If original camera was Scriptable (cutscene), restore its CFrame so cutscene resumes
                 if savedCameraState.CameraType == Enum.CameraType.Scriptable and savedCameraState.CameraCFrame then
                     pcall(function() camera.CFrame = savedCameraState.CameraCFrame end)
                 end
             else
-                -- Fallback: ensure camera subject is player's humanoid
                 if camera and player and player.Character then
                     local hum = player.Character:FindFirstChildOfClass("Humanoid")
                     if hum then
@@ -2152,7 +2417,6 @@ task.spawn(function()
             end
         end)
 
-        -- Clear saved state so next enable captures fresh state
         savedCameraState = nil
     end
 
@@ -2300,7 +2564,6 @@ task.spawn(function()
     applyBtn.MouseButton1Click:Connect(function()
         if not onlyOwner() then return end
         local valWS = tonumber(wsBox.Text) or savedWalkSpeed
-        -- removed upper limit clamp; only ensure non-negative
         valWS = math.max(valWS, 0)
         savedWalkSpeed = valWS
         player:SetAttribute("SavedWalkSpeed", savedWalkSpeed)
@@ -2310,6 +2573,17 @@ task.spawn(function()
         valJH = math.max(valJH, 0)
         savedJumpHeight = valJH
         player:SetAttribute("SavedJumpHeight", savedJumpHeight)
+
+        -- Apply immediately to current humanoid
+        pcall(function()
+            local char = player.Character
+            if char then
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    applyToHumanoid(hum)
+                end
+            end
+        end)
 
         if not bypassActive then
             enforceMovement()
@@ -2323,6 +2597,37 @@ task.spawn(function()
             task.delay(0, function()
                 if velocityActive then startVelocityMode() end
             end)
+        end
+    end)
+
+    -- RESET button: agora restaura os defaults detectados e aplica ao humanoide
+    resetBtnWJ.MouseButton1Click:Connect(function()
+        if not onlyOwner() then return end
+        local defaultWS, defaultJH = captureGameDefaultsIfMissing()
+        if defaultWS and defaultJH then
+            savedWalkSpeed = defaultWS
+            savedJumpHeight = defaultJH
+            wsBox.Text = tostring(savedWalkSpeed)
+            jhBox.Text = tostring(savedJumpHeight)
+            player:SetAttribute("SavedWalkSpeed", savedWalkSpeed)
+            player:SetAttribute("SavedJumpHeight", savedJumpHeight)
+
+            FLIGHT_BASE_SPEED = math.clamp(savedWalkSpeed * 5, 10, 1000)
+
+            -- Apply to current humanoid immediately
+            pcall(function()
+                local char = player.Character
+                if char then
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if hum then
+                        applyToHumanoid(hum)
+                    end
+                end
+            end)
+
+            if not bypassActive then
+                enforceMovement()
+            end
         end
     end)
 
@@ -2379,25 +2684,6 @@ task.spawn(function()
             end
         end
         updateAntiRubberbandState()
-    end)
-
-    resetBtnWJ.MouseButton1Click:Connect(function()
-        if not onlyOwner() then return end
-        local defaultWS, defaultJH = captureGameDefaultsIfMissing()
-        if defaultWS and defaultJH then
-            savedWalkSpeed = defaultWS
-            savedJumpHeight = defaultJH
-            wsBox.Text = tostring(savedWalkSpeed)
-            jhBox.Text = tostring(savedJumpHeight)
-            player:SetAttribute("SavedWalkSpeed", savedWalkSpeed)
-            player:SetAttribute("SavedJumpHeight", savedJumpHeight)
-
-            FLIGHT_BASE_SPEED = math.clamp(savedWalkSpeed * 5, 10, 1000)
-
-            if not bypassActive then
-                enforceMovement()
-            end
-        end
     end)
 
     local function initializeDefaultsOnJoin()
@@ -2522,6 +2808,9 @@ task.spawn(function()
 
     -- Ensure we watch for camera replacements from the start
     attachCurrentCameraWatcher()
+
+    -- Ensure collision group exists at start
+    ensureCollisionGroup()
 
     maintainNetworkOwnership()
 end)
